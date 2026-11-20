@@ -103,6 +103,32 @@
 
 extern void S9xProcessSound (unsigned int);
 
+static inline void S9xSA1MainLoopInline ()
+{
+    if (__builtin_expect(SA1.Flags & IRQ_PENDING_FLAG, 0))
+    {
+        if (SA1.IRQActive)
+        {
+            if (SA1.WaitingForInterrupt)
+            {
+                SA1.WaitingForInterrupt = FALSE;
+                SA1.PC++;
+            }
+            if (!SA1CheckFlag (IRQ))
+                S9xSA1Opcode_IRQ ();
+        }
+        else
+            SA1.Flags &= ~IRQ_PENDING_FLAG;
+    }
+    for (int i = 0; i < 3 && SA1.Executing; i++)
+    {
+#ifdef CPU_SHUTDOWN
+        SA1.PCAtOpcodeStart = SA1.PC;
+#endif
+        (*SA1.S9xOpcodes [*SA1.PC++].S9xOpcode) ();
+    }
+}
+
 void S9xMainLoop_SA1_SFX     (void);
 void S9xMainLoop_SA1_NoSFX   (void);
 void S9xMainLoop_NoSA1_SFX   (void);
@@ -137,7 +163,7 @@ void S9xMainLoop_SA1_SFX (void)
 	{
     	APU_EXECUTE ();
     
-    	if (CPU.Flags)
+    	if (__builtin_expect(CPU.Flags, 0))
     	{
     	    if (CPU.Flags & NMI_FLAG)
     	    {
@@ -187,7 +213,7 @@ void S9xMainLoop_SA1_SFX (void)
     	(*ICPU.S9xOpcodes [*CPU.PC++].S9xOpcode) ();
 	
     	if (SA1.Executing)
-    	    S9xSA1MainLoop ();
+    	    S9xSA1MainLoopInline ();
     	DO_HBLANK_CHECK_SFX();
     }
 
@@ -217,7 +243,7 @@ void S9xMainLoop_SA1_NoSFX (void)
 	{
     	APU_EXECUTE ();
     
-    	if (CPU.Flags)
+    	if (__builtin_expect(CPU.Flags, 0))
     	{
     	    if (CPU.Flags & NMI_FLAG)
     	    {
@@ -267,7 +293,7 @@ void S9xMainLoop_SA1_NoSFX (void)
     	(*ICPU.S9xOpcodes [*CPU.PC++].S9xOpcode) ();
 	
     	if (SA1.Executing)
-    	    S9xSA1MainLoop ();
+    	    S9xSA1MainLoopInline ();
     	DO_HBLANK_CHECK_NoSFX();
     }
 
@@ -288,7 +314,7 @@ void S9xMainLoop_NoSA1_SFX (void)
 	{
     	APU_EXECUTE ();
     
-    	if (CPU.Flags)
+    	if (__builtin_expect(CPU.Flags, 0))
     	{
     	    if (CPU.Flags & NMI_FLAG)
     	    {
@@ -366,7 +392,7 @@ void S9xMainLoop_NoSA1_NoSFX (void)
 	{
     	APU_EXECUTE ();
     
-    	if (CPU.Flags)
+    	if (__builtin_expect(CPU.Flags, 0))
     	{
     	    if (CPU.Flags & NMI_FLAG)
     	    {

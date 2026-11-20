@@ -1,5 +1,6 @@
 
 #include <sal.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -186,7 +187,6 @@ bool8_32 S9xDeinitUpdate (int Width, int Height, bool8_32)
 	switch (mMenuOptions.fullScreen)
 	{
 		case 0: /* No scaling */
-		// case 3: /* Hardware scaling */
 		case 4: /* Crop scaling */
 		{
 			u32 h = PAL ? SNES_HEIGHT_EXTENDED : SNES_HEIGHT;
@@ -201,11 +201,18 @@ bool8_32 S9xDeinitUpdate (int Width, int Height, bool8_32)
 				     + ((sal_VideoGetHeight() - h) / 2) * pitch;
 			}
 
-			for (y = 0; y < h; y++)
+			if (pitch == SNES_WIDTH * sizeof(u16))
 			{
-				memmove(dst, src, SNES_WIDTH * sizeof(u16));
-				src += SNES_WIDTH * sizeof(u16);
-				dst += pitch;
+				memcpy(dst, src, h * SNES_WIDTH * sizeof(u16));
+			}
+			else
+			{
+				for (y = 0; y < h; y++)
+				{
+					memcpy(dst, src, SNES_WIDTH * sizeof(u16));
+					src += SNES_WIDTH * sizeof(u16);
+					dst += pitch;
+				}
 			}
 			break;
 		}
@@ -255,6 +262,7 @@ bool8_32 S9xDeinitUpdate (int Width, int Height, bool8_32)
 	}
 
 	sal_VideoFlip(0);
+	return TRUE;
 }
 
 const char *S9xGetFilename (const char *ex)
@@ -391,7 +399,7 @@ void S9xSyncSpeed(void)
 	}
 
 	while (sal_AudioGetFramesBuffered() >= sal_AudioGetMaxFrames())
-		usleep(100);
+		sched_yield();
 }
 
 const char *S9xBasename (const char *f)
@@ -435,7 +443,7 @@ void S9xSaveSRAM (int showWarning)
 
 bool8_32 S9xOpenSoundDevice(int a, unsigned char b, int c)
 {
-
+	return TRUE;
 }
 
 void S9xAutoSaveSRAM (void)

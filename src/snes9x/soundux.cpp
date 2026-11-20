@@ -1128,10 +1128,10 @@ static inline void MixStereo (int sample_count)
 
 			if (Settings.InterpolatedSound && freq0 < FIXED_POINT && !mod)
 				ch->interpolate = ((ch->next_sample - ch->sample) * 
-					(long) freq0) / (long) FIXED_POINT;
+					(long) freq0) >> FIXED_POINT_SHIFT;
 		}
-		VL = (ch->sample * ch-> left_vol_level) / 128;
-		VR = (ch->sample * ch->right_vol_level) / 128;
+		VL = (ch->sample * ch-> left_vol_level) >> 7;
+		VR = (ch->sample * ch->right_vol_level) >> 7;
 
 		for (uint32 I = 0; I < (uint32) sample_count; I += 2)
 		{
@@ -1287,10 +1287,10 @@ static inline void MixStereo (int sample_count)
 					S9xSetEnvRate (ch, 0, -1, 0);
 					break;
 				}
-				ch-> left_vol_level = (ch->envx * ch->volume_left) / 128;
-				ch->right_vol_level = (ch->envx * ch->volume_right) / 128;
-				VL = (ch->sample * ch-> left_vol_level) / 128;
-				VR = (ch->sample * ch->right_vol_level) / 128;
+				ch-> left_vol_level = (ch->envx * ch->volume_left) >> 7;
+				ch->right_vol_level = (ch->envx * ch->volume_right) >> 7;
+				VL = (ch->sample * ch-> left_vol_level) >> 7;
+				VR = (ch->sample * ch->right_vol_level) >> 7;
 			}
 
 			ch->count += freq;
@@ -1340,9 +1340,9 @@ static inline void MixStereo (int sample_count)
 					if (Settings.InterpolatedSound && freq < FIXED_POINT && !mod)
 					{
 						ch->interpolate = ((ch->next_sample - ch->sample) * 
-						(long) freq) / (long) FIXED_POINT;
+						(long) freq) >> FIXED_POINT_SHIFT;
 						ch->sample = (int16) (ch->sample + (((ch->next_sample - ch->sample) * 
-						(long) (ch->count)) / (long) FIXED_POINT));
+						(long) (ch->count)) >> FIXED_POINT_SHIFT));
 					}		  
 					else
 						ch->interpolate = 0;
@@ -1356,8 +1356,8 @@ static inline void MixStereo (int sample_count)
 					ch->interpolate = 0;
 				}
 
-				VL = (ch->sample * ch-> left_vol_level) / 128;
-				VR = (ch->sample * ch->right_vol_level) / 128;
+				VL = (ch->sample * ch-> left_vol_level) >> 7;
+				VR = (ch->sample * ch->right_vol_level) >> 7;
 			}
 			else
 			{
@@ -1367,8 +1367,8 @@ static inline void MixStereo (int sample_count)
 
 					CLIP16(s);
 					ch->sample = (int16) s;
-					VL = (ch->sample * ch-> left_vol_level) / 128;
-					VR = (ch->sample * ch->right_vol_level) / 128;
+					VL = (ch->sample * ch-> left_vol_level) >> 7;
+					VR = (ch->sample * ch->right_vol_level) >> 7;
 				}
 			}
 
@@ -1429,9 +1429,9 @@ static inline void MixMono (int sample_count)
 			
 			if (Settings.InterpolatedSound && freq0 < FIXED_POINT && !mod)
 				ch->interpolate = ((ch->next_sample - ch->sample) * 
-				(long) freq0) / (long) FIXED_POINT;
+				(long) freq0) >> FIXED_POINT_SHIFT;
 		}
-		int32 V = (ch->sample * ch->left_vol_level) / 128;
+		int32 V = (ch->sample * ch->left_vol_level) >> 7;
 		
 		for (uint32 I = 0; I < (uint32) sample_count; I++)
 		{
@@ -1587,8 +1587,8 @@ static inline void MixMono (int sample_count)
 					S9xSetEnvRate (ch, 0, -1, 0);
 					break;
 		}
-		ch->left_vol_level = (ch->envx * ch->volume_left) / 128;
-		V = (ch->sample * ch->left_vol_level) / 128;
+		ch->left_vol_level = (ch->envx * ch->volume_left) >> 7;
+		V = (ch->sample * ch->left_vol_level) >> 7;
 		}
 		
 		ch->count += freq;
@@ -1638,9 +1638,9 @@ static inline void MixMono (int sample_count)
 				if (Settings.InterpolatedSound && freq < FIXED_POINT && !mod)
 				{
 					ch->interpolate = ((ch->next_sample - ch->sample) * 
-						(long) freq) / (long) FIXED_POINT;
+						(long) freq) >> FIXED_POINT_SHIFT;
 					ch->sample = (int16) (ch->sample + (((ch->next_sample - ch->sample) * 
-						(long) (ch->count)) / (long) FIXED_POINT));
+						(long) (ch->count)) >> FIXED_POINT_SHIFT));
 				}		  
 				else
 					ch->interpolate = 0;
@@ -1653,7 +1653,7 @@ static inline void MixMono (int sample_count)
 					ch->sample = (noise_gen << 17) >> 17;
 					ch->interpolate = 0;
 			}
-			V = (ch->sample * ch-> left_vol_level) / 128;
+			V = (ch->sample * ch-> left_vol_level) >> 7;
 		}
 		else
 		{
@@ -1663,7 +1663,7 @@ static inline void MixMono (int sample_count)
 				
 				CLIP16(s);
 				ch->sample = (int16) s;
-				V = (ch->sample * ch-> left_vol_level) / 128;
+				V = (ch->sample * ch-> left_vol_level) >> 7;
 			}
 		}
 		
@@ -1739,56 +1739,82 @@ void S9xMixSamples (uint8 *buffer, int sample_count)
 					if (FilterTapDefinitionBitfield == 0)
 					{
 						// ... but no filter defined.
-						for (J = 0; J < sample_count; J++)
+						int echo_ptr = SoundData.echo_ptr;
+						const int echo_size = SoundData.echo_buffer_size;
+						const int echo_fb = SoundData.echo_feedback;
+						const int mvol0 = SoundData.master_volume[0];
+						const int mvol1 = SoundData.master_volume[1];
+						const int evol0 = SoundData.echo_volume[0];
+						const int evol1 = SoundData.echo_volume[1];
+						signed short * __restrict__ out = (signed short *) buffer;
+						int32 * __restrict__ echo = Echo;
+						const int32 * __restrict__ ebuf = EchoBuffer;
+						const int32 * __restrict__ mbuf = MixBuffer;
+						for (J = 0; J < sample_count; J += 2)
 						{
-							int E = Echo [SoundData.echo_ptr];
-							
-							Echo [SoundData.echo_ptr] = (E * SoundData.echo_feedback) / 128 +
-								EchoBuffer [J];
-							
-							if ((SoundData.echo_ptr += 1) >= SoundData.echo_buffer_size)
-								SoundData.echo_ptr = 0;
-							
-							I = (MixBuffer [J] * 
-								SoundData.master_volume [J & 1] +
-								E * SoundData.echo_volume [J & 1]) / VOL_DIV16;
-							
+							int E = echo [echo_ptr];
+							echo [echo_ptr] = ((E * echo_fb) >> 7) + ebuf [J];
+							if (++echo_ptr >= echo_size) echo_ptr = 0;
+							I = (mbuf [J] * mvol0 + E * evol0) >> 7;
 							CLIP16(I);
-							((signed short *) buffer)[J] = I;
+							out[J] = I;
+
+							E = echo [echo_ptr];
+							echo [echo_ptr] = ((E * echo_fb) >> 7) + ebuf [J + 1];
+							if (++echo_ptr >= echo_size) echo_ptr = 0;
+							I = (mbuf [J + 1] * mvol1 + E * evol1) >> 7;
+							CLIP16(I);
+							out[J + 1] = I;
 						}
+						SoundData.echo_ptr = echo_ptr;
 					}
 					else
 					{
 						// ... with filter defined.
+						int echo_ptr = SoundData.echo_ptr;
+						const int echo_size = SoundData.echo_buffer_size;
+						const int echo_fb = SoundData.echo_feedback;
+						const int mvol0 = SoundData.master_volume[0];
+						const int mvol1 = SoundData.master_volume[1];
+						const int evol0 = SoundData.echo_volume[0];
+						const int evol1 = SoundData.echo_volume[1];
+						const int ft0 = FilterTaps[0], ft1 = FilterTaps[1], ft2 = FilterTaps[2], ft3 = FilterTaps[3];
+						const int ft4 = FilterTaps[4], ft5 = FilterTaps[5], ft6 = FilterTaps[6], ft7 = FilterTaps[7];
+						const uint8 ftmask = FilterTapDefinitionBitfield;
+						unsigned long z = Z;
+						signed short * __restrict__ out = (signed short *) buffer;
+						int32 * __restrict__ echo = Echo;
+						const int32 * __restrict__ ebuf = EchoBuffer;
+						const int32 * __restrict__ mbuf = MixBuffer;
 						for (J = 0; J < sample_count; J++)
 						{
-							int E = Echo [SoundData.echo_ptr];
+							int E = echo [echo_ptr];
 							
-							Loop [(Z - 0) & 15] = E;
-							E =  E                    * FilterTaps [0];
-							if (FilterTapDefinitionBitfield & 0x02) E += Loop [(Z -  2) & 15] * FilterTaps [1];
-							if (FilterTapDefinitionBitfield & 0x04) E += Loop [(Z -  4) & 15] * FilterTaps [2];
-							if (FilterTapDefinitionBitfield & 0x08) E += Loop [(Z -  6) & 15] * FilterTaps [3];
-							if (FilterTapDefinitionBitfield & 0x10) E += Loop [(Z -  8) & 15] * FilterTaps [4];
-							if (FilterTapDefinitionBitfield & 0x20) E += Loop [(Z - 10) & 15] * FilterTaps [5];
-							if (FilterTapDefinitionBitfield & 0x40) E += Loop [(Z - 12) & 15] * FilterTaps [6];
-							if (FilterTapDefinitionBitfield & 0x80) E += Loop [(Z - 14) & 15] * FilterTaps [7];
-							E /= 128;
-							Z++;
+							Loop [z & 15] = E;
+							E = E * ft0;
+							if (ftmask & 0x02) E += Loop [(z -  2) & 15] * ft1;
+							if (ftmask & 0x04) E += Loop [(z -  4) & 15] * ft2;
+							if (ftmask & 0x08) E += Loop [(z -  6) & 15] * ft3;
+							if (ftmask & 0x10) E += Loop [(z -  8) & 15] * ft4;
+							if (ftmask & 0x20) E += Loop [(z - 10) & 15] * ft5;
+							if (ftmask & 0x40) E += Loop [(z - 12) & 15] * ft6;
+							if (ftmask & 0x80) E += Loop [(z - 14) & 15] * ft7;
+							E >>= 7;
+							z++;
 							
-							Echo [SoundData.echo_ptr] = (E * SoundData.echo_feedback) / 128 +
-								EchoBuffer [J];
+							echo [echo_ptr] = ((E * echo_fb) >> 7) + ebuf [J];
 							
-							if ((SoundData.echo_ptr += 1) >= SoundData.echo_buffer_size)
-								SoundData.echo_ptr = 0;
+							if (++echo_ptr >= echo_size)
+								echo_ptr = 0;
 							
-							I = (MixBuffer [J] * 
-								SoundData.master_volume [J & 1] +
-								E * SoundData.echo_volume [J & 1]) / VOL_DIV16;
+							I = (mbuf [J] * ((J & 1) ? mvol1 : mvol0) +
+								E * ((J & 1) ? evol1 : evol0)) >> 7;
 							
 							CLIP16(I);
-							((signed short *) buffer)[J] = I;
+							out[J] = I;
 						}
+						SoundData.echo_ptr = echo_ptr;
+						Z = z;
 					}
 #ifndef FOREVER_STEREO
 				}
@@ -1852,13 +1878,18 @@ void S9xMixSamples (uint8 *buffer, int sample_count)
 		else
 		{
 			// 16-bit mono or stereo sound, no echo
-			for (J = 0; J < sample_count; J++)
+			const int mvol0 = SoundData.master_volume [0];
+			const int mvol1 = SoundData.master_volume [1];
+			signed short * __restrict__ out = (signed short *) buffer;
+			const int32 * __restrict__ mbuf = MixBuffer;
+			for (J = 0; J < sample_count; J += 2)
 			{
-				I = (MixBuffer [J] * 
-					SoundData.master_volume [J & 1]) / VOL_DIV16;
-				
+				I = (mbuf [J] * mvol0) >> 7;
 				CLIP16(I);
-				((signed short *) buffer)[J] = I;
+				out[J] = I;
+				I = (mbuf [J + 1] * mvol1) >> 7;
+				CLIP16(I);
+				out[J + 1] = I;
 			}
 		}
 	}

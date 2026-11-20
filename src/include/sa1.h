@@ -160,10 +160,9 @@ struct SSA1 {
 
 
 START_EXTERN_C
-uint8 S9xSA1GetByte (uint32);
-uint16 S9xSA1GetWord (uint32);
-void S9xSA1SetByte (uint8, uint32);
-void S9xSA1SetWord (uint16, uint32);
+extern uint8 OpenBus;
+uint8 S9xSA1GetByteSlow (uint32);
+void S9xSA1SetByteSlow (uint8, uint32);
 void S9xSA1SetPCBase (uint32);
 uint8 S9xGetSA1 (uint32);
 void S9xSetSA1 (uint8, uint32);
@@ -174,11 +173,64 @@ extern struct SOpcodes S9xSA1OpcodesM0X1 [256];
 extern struct SOpcodes S9xSA1OpcodesM0X0 [256];
 extern struct SSA1 SA1;
 
+static inline uint8 S9xSA1GetByte (uint32 address)
+{
+    uint8 *GetAddress = SA1.Map [(address >> MEMMAP_SHIFT) & MEMMAP_MASK];
+    if (__builtin_expect(GetAddress >= (uint8 *) CMemory::MAP_LAST, 1))
+        return *(GetAddress + (address & 0xffff));
+    return S9xSA1GetByteSlow (address);
+}
+
+static inline uint16 S9xSA1GetWord (uint32 address)
+{
+    if (__builtin_expect((address & 0x1fff) != 0x1fff, 1))
+    {
+        uint8 *GetAddress = SA1.Map [(address >> MEMMAP_SHIFT) & MEMMAP_MASK];
+        if (__builtin_expect(GetAddress >= (uint8 *) CMemory::MAP_LAST, 1))
+        {
+            uint8 *p = GetAddress + (address & 0xffff);
+            OpenBus = p[1];
+            return (uint16)p[0] | ((uint16)OpenBus << 8);
+        }
+    }
+    OpenBus = S9xSA1GetByte (address);
+    return (OpenBus | (S9xSA1GetByte (address + 1) << 8));
+}
+
+static inline void S9xSA1SetByte (uint8 byte, uint32 address)
+{
+    uint8 *Setaddress = SA1.WriteMap [(address >> MEMMAP_SHIFT) & MEMMAP_MASK];
+    if (__builtin_expect(Setaddress >= (uint8 *) CMemory::MAP_LAST, 1))
+    {
+        *(Setaddress + (address & 0xffff)) = byte;
+        return;
+    }
+    S9xSA1SetByteSlow (byte, address);
+}
+
+static inline void S9xSA1SetWord (uint16 Word, uint32 address)
+{
+    if (__builtin_expect((address & 0x1fff) != 0x1fff, 1))
+    {
+        uint8 *Setaddress = SA1.WriteMap [(address >> MEMMAP_SHIFT) & MEMMAP_MASK];
+        if (__builtin_expect(Setaddress >= (uint8 *) CMemory::MAP_LAST, 1))
+        {
+            uint8 *p = Setaddress + (address & 0xffff);
+            p[0] = (uint8) Word;
+            p[1] = (uint8) (Word >> 8);
+            return;
+        }
+    }
+    S9xSA1SetByte ((uint8) Word, address);
+    S9xSA1SetByte ((uint8) (Word >> 8), address + 1);
+}
+
 void S9xSA1MainLoop ();
 void S9xSA1Init ();
 void S9xFixSA1AfterSnapshotLoad ();
 void S9xSA1ExecuteDuringSleep ();
 END_EXTERN_C
+void S9xSA1Opcode_IRQ ();
 
 #define SNES_IRQ_SOURCE	    (1 << 7)
 #define TIMER_IRQ_SOURCE    (1 << 6)

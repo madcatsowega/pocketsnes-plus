@@ -12,7 +12,7 @@ u32 sal_TimerRead()
   	gettimeofday(&tval, 0);
   	//tval.tv_usec
   	//tval.tv_sec
-	return ((tval.tv_sec * 1000000) + tval.tv_usec) / mFrameTime;
+	return (((u32)tval.tv_sec * 1000000U) + (u32)tval.tv_usec) / mFrameTime;
 
 	/*
 	if (tval.tv_usec < tv_usec)

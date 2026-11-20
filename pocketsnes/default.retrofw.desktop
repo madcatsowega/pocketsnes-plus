@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=PocketSNES
-Comment=SNES/SFC Emulator
+Name=PocketSNES+
+Comment=SNES/SFC Emulator (XBurst1 Fast SA-1)
 Exec=pocketsnes.dge %f
 Icon=pocketsnes
 Categories=emulators;

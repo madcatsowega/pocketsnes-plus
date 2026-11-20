@@ -8,12 +8,9 @@
 
 TARGET = pocketsnes/pocketsnes.dge
 
-CHAINPREFIX   := /opt/mipsel-RetroFW-linux-uclibc
-CROSS_COMPILE := $(CHAINPREFIX)/usr/bin/mipsel-linux-
-
-CC  := $(CROSS_COMPILE)gcc
-CXX := $(CROSS_COMPILE)g++
-STRIP := $(CROSS_COMPILE)strip
+CC  ?= mipsel-linux-gcc
+CXX ?= mipsel-linux-g++
+STRIP ?= mipsel-linux-strip
 
 SYSROOT := $(shell $(CC) --print-sysroot)
 SDL_CFLAGS := $(shell $(SYSROOT)/usr/bin/sdl-config --cflags)
@@ -24,18 +21,20 @@ INCLUDE = -I src \
 		-I src/include \
 		-I menu -I src/linux -I src/snes9x
 
-CFLAGS =  -std=gnu++11 $(INCLUDE) -DRC_OPTIMIZED -DGCW_ZERO -D__LINUX__ -D__DINGUX__ -DFOREVER_16_BIT $(SDL_CFLAGS)
-CFLAGS += -O3 -fdata-sections -ffunction-sections -fomit-frame-pointer -fno-builtin -fpermissive
-CFLAGS += -mips32 -march=mips32 -mno-mips16 -DMIPS_XBURST 
-CFLAGS += -fno-common -Wno-write-strings -Wno-sign-compare -ffast-math -ftree-vectorize
-CFLAGS += -funswitch-loops -fno-strict-aliasing
+CFLAGS =  $(INCLUDE) -DRC_OPTIMIZED -DGCW_ZERO -D__LINUX__ -D__DINGUX__ -DFOREVER_16_BIT -DFOREVER_16_BIT_SOUND -DFOREVER_FORWARD_STEREO -DNO_VOLATILE_SOUND $(SDL_CFLAGS)
+CFLAGS += -O3 -fdata-sections -ffunction-sections -fomit-frame-pointer -fno-builtin -fwrapv -fno-strict-aliasing
+CFLAGS += -mips32 -march=mips32 -mhard-float -mno-mips16 -mplt -mno-shared -DMIPS_XBURST
+CFLAGS += -fno-common -Wno-write-strings -Wno-sign-compare -ffast-math -ftree-vectorize -funswitch-loops
 CFLAGS += -DFAST_LSB_WORD_ACCESS
-CFLAGS += -flto=4 -fwhole-program -fuse-linker-plugin -fmerge-all-constants
-CFLAGS += -fdata-sections -ffunction-sections -fpermissive
-# CFLAGS += -fprofile-generate -fprofile-dir=/home/retrofw/profile/pocketsnes
-CFLAGS += -fprofile-use -fprofile-dir=./profile
+CFLAGS += -fmerge-all-constants
+ifeq ($(PGO),generate)
+CFLAGS += -fprofile-generate -fprofile-dir=/tmp/profile
+endif
+ifeq ($(PGO),use)
+CFLAGS += -fprofile-use -fprofile-dir=./profile -fprofile-correction -Wno-missing-profile
+endif
 
-CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti -fno-math-errno -fno-threadsafe-statics
+CXXFLAGS = -std=gnu++11 $(CFLAGS) -fpermissive -fno-exceptions -fno-rtti -fno-math-errno -fno-threadsafe-statics
 
 LDFLAGS = $(CXXFLAGS) -lpthread -lz -lpng $(SDL_LIBS) -lSDL_image -Wl,--as-needed -Wl,--gc-sections -s
 
@@ -73,7 +72,7 @@ ipk: all
 	$(CC) $(CFLAGS) -c $< -o $@
 
 %.o: %.cpp
-	$(CXX) $(CFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 .PHONY : clean
 

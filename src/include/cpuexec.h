@@ -94,11 +94,11 @@
 #include "65c816.h"
 
 #define DO_HBLANK_CHECK_SFX() \
-    if (CPU.Cycles >= CPU.NextEvent) \
+    if (__builtin_expect(CPU.Cycles >= CPU.NextEvent, 0)) \
 	S9xDoHBlankProcessing_SFX ();
 
 #define DO_HBLANK_CHECK_NoSFX() \
-    if (CPU.Cycles >= CPU.NextEvent) \
+    if (__builtin_expect(CPU.Cycles >= CPU.NextEvent, 0)) \
 	S9xDoHBlankProcessing_NoSFX ();
 
 struct SOpcodes {

@@ -195,7 +195,7 @@ void S9xFixSA1AfterSnapshotLoad ()
     SA1.Executing = !SA1.Waiting;
 }
 
-uint8 S9xSA1GetByte (uint32 address)
+uint8 S9xSA1GetByteSlow (uint32 address)
 {
     uint8 *GetAddress = SA1.Map [(address >> MEMMAP_SHIFT) & MEMMAP_MASK];
     if (GetAddress >= (uint8 *) CMemory::MAP_LAST)
@@ -232,13 +232,7 @@ uint8 S9xSA1GetByte (uint32 address)
     }
 }
 
-uint16 S9xSA1GetWord (uint32 address)
-{
-    OpenBus = S9xSA1GetByte (address);
-    return (OpenBus | (S9xSA1GetByte (address + 1) << 8));
-}
-
-void S9xSA1SetByte (uint8 byte, uint32 address)
+void S9xSA1SetByteSlow (uint8 byte, uint32 address)
 {
     uint8 *Setaddress = SA1.WriteMap [(address >> MEMMAP_SHIFT) & MEMMAP_MASK];
 
@@ -292,12 +286,6 @@ void S9xSA1SetByte (uint8 byte, uint32 address)
     default:
 	return;
     }
-}
-
-void S9xSA1SetWord (uint16 Word, uint32 address)
-{
-    S9xSA1SetByte ((uint8) Word, address);
-    S9xSA1SetByte ((uint8) (Word >> 8), address + 1);
 }
 
 void S9xSA1SetPCBase (uint32 address)
