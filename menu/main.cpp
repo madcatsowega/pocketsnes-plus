@@ -163,6 +163,11 @@ bool8_32 S9xInitUpdate ()
 	return TRUE;
 }
 
+#ifdef MIPS_XBURST
+extern "C" void mxu_memcpy32(void *dst, const void *src, unsigned int nbytes);
+extern int snes_use_mxu;
+#endif
+
 bool8_32 S9xDeinitUpdate (int Width, int Height, bool8_32)
 {
 	if(mInMenu) return TRUE;
@@ -203,10 +208,25 @@ bool8_32 S9xDeinitUpdate (int Width, int Height, bool8_32)
 
 			if (pitch == SNES_WIDTH * sizeof(u16))
 			{
+#ifdef MIPS_XBURST
+				if (snes_use_mxu && ((((uintptr_t)dst | (uintptr_t)src) & 3) == 0))
+					mxu_memcpy32(dst, src, h * SNES_WIDTH * sizeof(u16));
+				else
+#endif
 				memcpy(dst, src, h * SNES_WIDTH * sizeof(u16));
 			}
 			else
 			{
+#ifdef MIPS_XBURST
+				if (snes_use_mxu && ((((uintptr_t)dst | (uintptr_t)src | pitch) & 3) == 0)) {
+					for (y = 0; y < h; y++)
+					{
+						mxu_memcpy32(dst, src, SNES_WIDTH * sizeof(u16));
+						src += SNES_WIDTH * sizeof(u16);
+						dst += pitch;
+					}
+				} else
+#endif
 				for (y = 0; y < h; y++)
 				{
 					memcpy(dst, src, SNES_WIDTH * sizeof(u16));

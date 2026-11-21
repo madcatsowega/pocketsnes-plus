@@ -42,9 +42,11 @@ LDFLAGS = $(CXXFLAGS) -lpthread -lz -lpng $(SDL_LIBS) -lSDL_image -Wl,--as-neede
 SOURCE = src/snes9x menu sal/linux sal
 SRC_CPP = $(foreach dir, $(SOURCE), $(wildcard $(dir)/*.cpp))
 SRC_C   = $(foreach dir, $(SOURCE), $(wildcard $(dir)/*.c))
+SRC_S   = $(foreach dir, $(SOURCE), $(wildcard $(dir)/*.S))
 OBJ_CPP = $(patsubst %.cpp, %.o, $(SRC_CPP))
 OBJ_C   = $(patsubst %.c, %.o, $(SRC_C))
-OBJS    = $(OBJ_CPP) $(OBJ_C)
+OBJ_S   = $(patsubst %.S, %.o, $(SRC_S))
+OBJS    = $(OBJ_CPP) $(OBJ_C) $(OBJ_S)
 
 .PHONY : all
 all : $(TARGET)
@@ -69,6 +71,9 @@ ipk: all
 	@ar r dist/pocketsnes.ipk /tmp/.pocketsnes-ipk/control.tar.gz /tmp/.pocketsnes-ipk/data.tar.gz /tmp/.pocketsnes-ipk/debian-binary
 
 %.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+%.o: %.S
 	$(CC) $(CFLAGS) -c $< -o $@
 
 %.o: %.cpp

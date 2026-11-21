@@ -96,6 +96,34 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
+
+#ifdef MIPS_XBURST
+extern "C" {
+void jz_mxu_enable(void);
+void snes_mix_noecho_mxu(const int *mbuf, short *out, int sample_count, int mvol0, int mvol1);
+}
+int snes_use_mxu = 0;
+
+static void snes_detect_and_enable_mxu(void)
+{
+	static int checked = 0;
+	if (checked) return;
+	checked = 1;
+	FILE *f = fopen("/proc/cpuinfo", "r");
+	if (!f) return;
+	char line[256];
+	while (fgets(line, sizeof(line), f)) {
+		if (strstr(line, "ASEs implemented") && strstr(line, "mxu")) {
+			jz_mxu_enable();
+			snes_use_mxu = 1;
+			printf("PocketSNES+: JZ4760B MXU SIMD enabled.\n");
+			break;
+		}
+	}
+	fclose(f);
+}
+#endif
 
 #define CLIP16(v) \
 	if ((v) < -32768) \
@@ -1882,6 +1910,13 @@ void S9xMixSamples (uint8 *buffer, int sample_count)
 			const int mvol1 = SoundData.master_volume [1];
 			signed short * __restrict__ out = (signed short *) buffer;
 			const int32 * __restrict__ mbuf = MixBuffer;
+#ifdef MIPS_XBURST
+			if (snes_use_mxu && (sample_count & 1) == 0 && (((uintptr_t) out) & 3) == 0)
+			{
+				snes_mix_noecho_mxu((const int *) mbuf, out, sample_count, mvol0, mvol1);
+			}
+			else
+#endif
 			for (J = 0; J < sample_count; J += 2)
 			{
 				I = (mbuf [J] * mvol0) >> 7;
@@ -2138,6 +2173,9 @@ void S9xSetPlaybackRate (uint32 playback_rate)
 
 bool8 S9xInitSound (int mode, bool8 stereo, int buffer_size)
 {
+#ifdef MIPS_XBURST
+    snes_detect_and_enable_mxu();
+#endif
     so.sound_fd = -1;
     so.sound_switch = 255;
 	
