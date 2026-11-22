@@ -102,6 +102,9 @@
 extern "C" {
 void jz_mxu_enable(void);
 void snes_mix_noecho_mxu(const int *mbuf, short *out, int sample_count, int mvol0, int mvol1);
+void snes_mix_echo_nofir_mxu(const int *mbuf, const int *ebuf, int *echo, short *out, int count, const int *params);
+void snes_mix_echo_fir_stereo_mxu(const int *mbuf, const int *ebuf, int *echo, short *out, int count, int *win, const int *taps8, const int *params5);
+void snes_mix_echo_fir_mono_mxu(const int *mbuf, const int *ebuf, int *echo, short *out, int count, int *win, const int *taps8, const int *params5);
 }
 int snes_use_mxu = 0;
 
@@ -1778,6 +1781,25 @@ void S9xMixSamples (uint8 *buffer, int sample_count)
 						int32 * __restrict__ echo = Echo;
 						const int32 * __restrict__ ebuf = EchoBuffer;
 						const int32 * __restrict__ mbuf = MixBuffer;
+#ifdef MIPS_XBURST
+						if (snes_use_mxu && (sample_count & 1) == 0 && (echo_size & 1) == 0 && (echo_ptr & 1) == 0 && (((uintptr_t) out) & 3) == 0)
+						{
+							const int params[5] = { echo_fb, mvol0, mvol1, evol0, evol1 };
+							int pos = 0;
+							while (pos < sample_count)
+							{
+								int chunk = sample_count - pos;
+								int avail = echo_size - echo_ptr;
+								if (chunk > avail) chunk = avail;
+								snes_mix_echo_nofir_mxu((const int *)mbuf + pos, (const int *)ebuf + pos,
+									(int *)echo + echo_ptr, out + pos, chunk, params);
+								pos += chunk;
+								echo_ptr += chunk;
+								if (echo_ptr >= echo_size) echo_ptr = 0;
+							}
+						}
+						else
+#endif
 						for (J = 0; J < sample_count; J += 2)
 						{
 							int E = echo [echo_ptr];
@@ -1806,40 +1828,69 @@ void S9xMixSamples (uint8 *buffer, int sample_count)
 						const int mvol1 = SoundData.master_volume[1];
 						const int evol0 = SoundData.echo_volume[0];
 						const int evol1 = SoundData.echo_volume[1];
-						const int ft0 = FilterTaps[0], ft1 = FilterTaps[1], ft2 = FilterTaps[2], ft3 = FilterTaps[3];
-						const int ft4 = FilterTaps[4], ft5 = FilterTaps[5], ft6 = FilterTaps[6], ft7 = FilterTaps[7];
-						const uint8 ftmask = FilterTapDefinitionBitfield;
 						unsigned long z = Z;
 						signed short * __restrict__ out = (signed short *) buffer;
 						int32 * __restrict__ echo = Echo;
 						const int32 * __restrict__ ebuf = EchoBuffer;
 						const int32 * __restrict__ mbuf = MixBuffer;
-						for (J = 0; J < sample_count; J++)
+#ifdef MIPS_XBURST
+						if (snes_use_mxu && (sample_count & 1) == 0 && (echo_size & 1) == 0 && (echo_ptr & 1) == 0 && (((uintptr_t) out) & 3) == 0)
 						{
-							int E = echo [echo_ptr];
-							
-							Loop [z & 15] = E;
-							E = E * ft0;
-							if (ftmask & 0x02) E += Loop [(z -  2) & 15] * ft1;
-							if (ftmask & 0x04) E += Loop [(z -  4) & 15] * ft2;
-							if (ftmask & 0x08) E += Loop [(z -  6) & 15] * ft3;
-							if (ftmask & 0x10) E += Loop [(z -  8) & 15] * ft4;
-							if (ftmask & 0x20) E += Loop [(z - 10) & 15] * ft5;
-							if (ftmask & 0x40) E += Loop [(z - 12) & 15] * ft6;
-							if (ftmask & 0x80) E += Loop [(z - 14) & 15] * ft7;
-							E >>= 7;
-							z++;
-							
-							echo [echo_ptr] = ((E * echo_fb) >> 7) + ebuf [J];
-							
-							if (++echo_ptr >= echo_size)
-								echo_ptr = 0;
-							
-							I = (mbuf [J] * ((J & 1) ? mvol1 : mvol0) +
-								E * ((J & 1) ? evol1 : evol0)) >> 7;
-							
-							CLIP16(I);
-							out[J] = I;
+							const int params[5] = { echo_fb, mvol0, mvol1, evol0, evol1 };
+							int win[16 + 128];
+							for (int k = 0; k < 16; k++)
+								win[k] = Loop[(z - 16 + k) & 15];
+							int pos = 0;
+							while (pos < sample_count)
+							{
+								int chunk = sample_count - pos;
+								int avail = echo_size - echo_ptr;
+								if (chunk > avail) chunk = avail;
+								if (chunk > 128) chunk = 128;
+								snes_mix_echo_fir_stereo_mxu((const int *)mbuf + pos, (const int *)ebuf + pos,
+									(int *)echo + echo_ptr, out + pos, chunk, win + 16, FilterTaps, params);
+								memcpy(win, win + chunk, 16 * sizeof(int));
+								pos += chunk;
+								z += chunk;
+								echo_ptr += chunk;
+								if (echo_ptr >= echo_size) echo_ptr = 0;
+							}
+							for (int k = 0; k < 16; k++)
+								Loop[(z - 16 + k) & 15] = win[k];
+						}
+						else
+#endif
+						{
+							const int ft0 = FilterTaps[0], ft1 = FilterTaps[1], ft2 = FilterTaps[2], ft3 = FilterTaps[3];
+							const int ft4 = FilterTaps[4], ft5 = FilterTaps[5], ft6 = FilterTaps[6], ft7 = FilterTaps[7];
+							const uint8 ftmask = FilterTapDefinitionBitfield;
+							for (J = 0; J < sample_count; J++)
+							{
+								int E = echo [echo_ptr];
+								
+								Loop [z & 15] = E;
+								E = E * ft0;
+								if (ftmask & 0x02) E += Loop [(z -  2) & 15] * ft1;
+								if (ftmask & 0x04) E += Loop [(z -  4) & 15] * ft2;
+								if (ftmask & 0x08) E += Loop [(z -  6) & 15] * ft3;
+								if (ftmask & 0x10) E += Loop [(z -  8) & 15] * ft4;
+								if (ftmask & 0x20) E += Loop [(z - 10) & 15] * ft5;
+								if (ftmask & 0x40) E += Loop [(z - 12) & 15] * ft6;
+								if (ftmask & 0x80) E += Loop [(z - 14) & 15] * ft7;
+								E >>= 7;
+								z++;
+								
+								echo [echo_ptr] = ((E * echo_fb) >> 7) + ebuf [J];
+								
+								if (++echo_ptr >= echo_size)
+									echo_ptr = 0;
+								
+								I = (mbuf [J] * ((J & 1) ? mvol1 : mvol0) +
+									E * ((J & 1) ? evol1 : evol0)) >> 7;
+								
+								CLIP16(I);
+								out[J] = I;
+							}
 						}
 						SoundData.echo_ptr = echo_ptr;
 						Z = z;
@@ -1849,56 +1900,147 @@ void S9xMixSamples (uint8 *buffer, int sample_count)
 				else
 				{
 					// 16-bit mono sound with echo enabled...
+					int echo_ptr = SoundData.echo_ptr;
+					const int echo_size = SoundData.echo_buffer_size;
+					const int echo_fb = SoundData.echo_feedback;
+					const int mvol0 = SoundData.master_volume[0];
+					const int evol0 = SoundData.echo_volume[0];
+					signed short * __restrict__ out = (signed short *) buffer;
+					int32 * __restrict__ echo = Echo;
+					const int32 * __restrict__ ebuf = EchoBuffer;
+					const int32 * __restrict__ mbuf = MixBuffer;
 					if (FilterTapDefinitionBitfield == 0)
 					{
 						// ... no filter defined
+#ifdef MIPS_XBURST
+						if (snes_use_mxu && (((uintptr_t) out) & 3) == 0)
+						{
+							const int params[5] = { echo_fb, mvol0, mvol0, evol0, evol0 };
+							int pos = 0;
+							while (pos < sample_count)
+							{
+								int chunk = sample_count - pos;
+								int avail = echo_size - echo_ptr;
+								if (chunk > avail) chunk = avail;
+								chunk &= ~1;
+								if (chunk > 0 && (((uintptr_t)(out + pos)) & 3) == 0)
+								{
+									snes_mix_echo_nofir_mxu((const int *)mbuf + pos, (const int *)ebuf + pos,
+										(int *)echo + echo_ptr, out + pos, chunk, params);
+									pos += chunk;
+									echo_ptr += chunk;
+									if (echo_ptr >= echo_size) echo_ptr = 0;
+								}
+								else
+								{
+									int E = echo[echo_ptr];
+									echo[echo_ptr] = ((E * echo_fb) >> 7) + ebuf[pos];
+									if (++echo_ptr >= echo_size) echo_ptr = 0;
+									I = (mbuf[pos] * mvol0 + E * evol0) >> 7;
+									CLIP16(I);
+									out[pos] = I;
+									pos++;
+								}
+							}
+						}
+						else
+#endif
 						for (J = 0; J < sample_count; J++)
 						{
-							int E = Echo [SoundData.echo_ptr];
-							
-							Echo [SoundData.echo_ptr] = (E * SoundData.echo_feedback) / 128 +
-								EchoBuffer [J];
-							
-							if ((SoundData.echo_ptr += 1) >= SoundData.echo_buffer_size)
-								SoundData.echo_ptr = 0;
-							
-							I = (MixBuffer [J] *
-								SoundData.master_volume [0] +
-								E * SoundData.echo_volume [0]) / VOL_DIV16;
+							int E = echo [echo_ptr];
+							echo [echo_ptr] = ((E * echo_fb) >> 7) + ebuf [J];
+							if (++echo_ptr >= echo_size) echo_ptr = 0;
+							I = (mbuf [J] * mvol0 + E * evol0) >> 7;
 							CLIP16(I);
-							((signed short *) buffer)[J] = I;
+							out[J] = I;
 						}
+						SoundData.echo_ptr = echo_ptr;
 					}
 					else
 					{
 						// ... with filter defined
-						for (J = 0; J < sample_count; J++)
+						unsigned long z = Z;
+#ifdef MIPS_XBURST
+						if (snes_use_mxu && (((uintptr_t) out) & 3) == 0)
 						{
-							int E = Echo [SoundData.echo_ptr];
-							
-							Loop [(Z - 0) & 7] = E;
-							E =  E                  * FilterTaps [0];
-							if (FilterTapDefinitionBitfield & 0x02) E += Loop [(Z - 1) & 7] * FilterTaps [1];
-							if (FilterTapDefinitionBitfield & 0x04) E += Loop [(Z - 2) & 7] * FilterTaps [2];
-							if (FilterTapDefinitionBitfield & 0x08) E += Loop [(Z - 3) & 7] * FilterTaps [3];
-							if (FilterTapDefinitionBitfield & 0x10) E += Loop [(Z - 4) & 7] * FilterTaps [4];
-							if (FilterTapDefinitionBitfield & 0x20) E += Loop [(Z - 5) & 7] * FilterTaps [5];
-							if (FilterTapDefinitionBitfield & 0x40) E += Loop [(Z - 6) & 7] * FilterTaps [6];
-							if (FilterTapDefinitionBitfield & 0x80) E += Loop [(Z - 7) & 7] * FilterTaps [7];
-							E /= 128;
-							Z++;
-							
-							Echo [SoundData.echo_ptr] = (E * SoundData.echo_feedback) / 128 +
-								EchoBuffer [J];
-							
-							if ((SoundData.echo_ptr += 1) >= SoundData.echo_buffer_size)
-								SoundData.echo_ptr = 0;
-							
-							I = (MixBuffer [J] * SoundData.master_volume [0] +
-								E * SoundData.echo_volume [0]) / VOL_DIV16;
-							CLIP16(I);
-							((signed short *) buffer)[J] = I;
+							const int params[5] = { echo_fb, mvol0, mvol0, evol0, evol0 };
+							int win[8 + 128];
+							for (int k = 0; k < 8; k++)
+								win[k] = Loop[(z - 8 + k) & 7];
+							int pos = 0;
+							while (pos < sample_count)
+							{
+								int chunk = sample_count - pos;
+								int avail = echo_size - echo_ptr;
+								if (chunk > avail) chunk = avail;
+								if (chunk > 128) chunk = 128;
+								chunk &= ~1;
+								if (chunk > 0 && (((uintptr_t)(out + pos)) & 3) == 0)
+								{
+									snes_mix_echo_fir_mono_mxu((const int *)mbuf + pos, (const int *)ebuf + pos,
+										(int *)echo + echo_ptr, out + pos, chunk, win + 8, FilterTaps, params);
+									memcpy(win, win + chunk, 8 * sizeof(int));
+									pos += chunk;
+									z += chunk;
+									echo_ptr += chunk;
+									if (echo_ptr >= echo_size) echo_ptr = 0;
+								}
+								else
+								{
+									int E = echo[echo_ptr];
+									win[8] = E;
+									E = E * FilterTaps[0]
+									  + win[7] * FilterTaps[1] + win[6] * FilterTaps[2] + win[5] * FilterTaps[3]
+									  + win[4] * FilterTaps[4] + win[3] * FilterTaps[5] + win[2] * FilterTaps[6]
+									  + win[1] * FilterTaps[7];
+									E >>= 7;
+									memmove(win, win + 1, 8 * sizeof(int));
+									echo[echo_ptr] = ((E * echo_fb) >> 7) + ebuf[pos];
+									if (++echo_ptr >= echo_size) echo_ptr = 0;
+									I = (mbuf[pos] * mvol0 + E * evol0) >> 7;
+									CLIP16(I);
+									out[pos] = I;
+									pos++;
+									z++;
+								}
+							}
+							for (int k = 0; k < 8; k++)
+								Loop[(z - 8 + k) & 7] = win[k];
 						}
+						else
+#endif
+						{
+							const int ft0 = FilterTaps[0], ft1 = FilterTaps[1], ft2 = FilterTaps[2], ft3 = FilterTaps[3];
+							const int ft4 = FilterTaps[4], ft5 = FilterTaps[5], ft6 = FilterTaps[6], ft7 = FilterTaps[7];
+							const uint8 ftmask = FilterTapDefinitionBitfield;
+							for (J = 0; J < sample_count; J++)
+							{
+								int E = echo [echo_ptr];
+								
+								Loop [z & 7] = E;
+								E = E * ft0;
+								if (ftmask & 0x02) E += Loop [(z - 1) & 7] * ft1;
+								if (ftmask & 0x04) E += Loop [(z - 2) & 7] * ft2;
+								if (ftmask & 0x08) E += Loop [(z - 3) & 7] * ft3;
+								if (ftmask & 0x10) E += Loop [(z - 4) & 7] * ft4;
+								if (ftmask & 0x20) E += Loop [(z - 5) & 7] * ft5;
+								if (ftmask & 0x40) E += Loop [(z - 6) & 7] * ft6;
+								if (ftmask & 0x80) E += Loop [(z - 7) & 7] * ft7;
+								E >>= 7;
+								z++;
+								
+								echo [echo_ptr] = ((E * echo_fb) >> 7) + ebuf [J];
+								
+								if (++echo_ptr >= echo_size)
+									echo_ptr = 0;
+								
+								I = (mbuf [J] * mvol0 + E * evol0) >> 7;
+								CLIP16(I);
+								out[J] = I;
+							}
+						}
+						SoundData.echo_ptr = echo_ptr;
+						Z = z;
 					}
 				}
 #endif
@@ -1907,7 +2049,11 @@ void S9xMixSamples (uint8 *buffer, int sample_count)
 		{
 			// 16-bit mono or stereo sound, no echo
 			const int mvol0 = SoundData.master_volume [0];
+#ifndef FOREVER_STEREO
+			const int mvol1 = so.stereo ? SoundData.master_volume [1] : mvol0;
+#else
 			const int mvol1 = SoundData.master_volume [1];
+#endif
 			signed short * __restrict__ out = (signed short *) buffer;
 			const int32 * __restrict__ mbuf = MixBuffer;
 #ifdef MIPS_XBURST

@@ -167,6 +167,8 @@ struct SGFX{
     uint8  r2130;
     uint8  r2131;
     bool8  Pseudo;
+    uint8  HalfRes;       /* 0 = full 224p, 1 = half-V line-doubled, 2 = half-V interlaced */
+    uint8  HalfResParity; /* 0 = even scanlines, 1 = odd scanlines */
     
 #ifdef GFX_MULTI_FORMAT
     uint32 PixelFormat;

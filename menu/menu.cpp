@@ -56,11 +56,19 @@ void DefaultMenuOptions(void)
 	mMenuOptions->cpuSpeed = 336;
 	mMenuOptions->country = 0;
 	mMenuOptions->showFps = 0;
-	mMenuOptions->soundRate = 48000;
+	mMenuOptions->soundRate = 32000;
 	mMenuOptions->stereo = 0;
 	mMenuOptions->fullScreen = hwscale ? 3 : 1;
 	mMenuOptions->autoSaveSram = 1;
 	mMenuOptions->soundSync = 1;
+	mMenuOptions->halfRes = 0;
+	mMenuOptions->noTransparency = 0;
+	mMenuOptions->autoFsCap = 0;
+	mMenuOptions->disableEcho = 0;
+	mMenuOptions->disableInterp = 0;
+	mMenuOptions->cyclesMode = 0;
+	mMenuOptions->clockMhz = 0;
+	mMenuOptions->spare09 = 0;
 }
 
 s32 LoadMenuOptions(const char *path, const char *filename, const char *ext, const char *optionsmem, s32 maxSize, s32 showMessage)
@@ -919,9 +927,10 @@ void ShowCredits()
 	s32 menuExit = 0, menuCount = 0, menufocus = 0, menuSmooth = 0;
 	u32 keys = 0;
 
-	strcpy(mMenuText[menuCount++], "PocketSNES - built " __DATE__);
+	strcpy(mMenuText[menuCount++], "PocketSNES+ v2 - " __DATE__);
 	strcpy(mMenuText[menuCount++], "-------------------------------------");
 	strcpy(mMenuText[menuCount++], "Based on Snes9x version " VERSION /* snes9x.h */);
+	strcpy(mMenuText[menuCount++], "RS-97+ MXU & v2 upgrades: madcatsowega");
 	strcpy(mMenuText[menuCount++], "PocketSNES created by Scott Ramsby");
 	strcpy(mMenuText[menuCount++], "Initial port to the Dingoo by Reesy");
 	strcpy(mMenuText[menuCount++], "Ported to OpenDingux by pcercuei");
@@ -986,6 +995,24 @@ void MainMenuUpdateText(s32 menu_index)
 	}
 }
 
+static const unsigned int mFrameSkipOrder[] = { 0, 1, 7, 8, 2, 3, 4, 5, 6 };
+static const unsigned int mCyclesOrder[]    = { 4, 5, 0, 1, 2, 3 };
+static const unsigned int mCyclesPct[]      = { 100, 115, 130, 150, 75, 85 };
+static const unsigned int mClockPresets[]   = { 0, 528, 552, 576, 600, 624, 648, 660, 672, 678 };
+
+static unsigned int StepLookup(const unsigned int *tbl, int n, unsigned int cur, int dir)
+{
+	int idx = 0;
+	for (int i = 0; i < n; i++) {
+		if (tbl[i] == cur) {
+			idx = i;
+			break;
+		}
+	}
+	idx = (idx + dir + n) % n;
+	return tbl[idx];
+}
+
 static
 void VideoSettingsMenuUpdateText(s32 menu_index)
 {
@@ -995,10 +1022,57 @@ void VideoSettingsMenuUpdateText(s32 menu_index)
 				case 0:
 					strcpy(mMenuText[menu_index],  "Frameskip                  AUTO");
 					break;
+				case 1:
+					strcpy(mMenuText[menu_index],  "Frameskip             0 (60fps)");
+					break;
+				case 7:
+					strcpy(mMenuText[menu_index],  "Frameskip           1/4 (45fps)");
+					break;
+				case 8:
+					strcpy(mMenuText[menu_index],  "Frameskip           1/3 (40fps)");
+					break;
+				case 2:
+					strcpy(mMenuText[menu_index],  "Frameskip             1 (30fps)");
+					break;
+				case 3:
+					strcpy(mMenuText[menu_index],  "Frameskip             2 (20fps)");
+					break;
 				default:
 					sprintf(mMenuText[menu_index], "Frameskip                     %1d", mMenuOptions->frameSkip - 1);
 					break;
 			}
+			break;
+
+		case VIDEO_SETTINGS_MENU_AUTOFSCAP:
+			switch (mMenuOptions->autoFsCap) {
+				case 1:
+					strcpy(mMenuText[menu_index], "Auto-FS mode       BALANCED (2)");
+					break;
+				case 2:
+					strcpy(mMenuText[menu_index], "Auto-FS mode         LEGACY (5)");
+					break;
+				default:
+					strcpy(mMenuText[menu_index], "Auto-FS mode         SMOOTH (1)");
+					break;
+			}
+			break;
+
+		case VIDEO_SETTINGS_MENU_HALFRES:
+			switch (mMenuOptions->halfRes) {
+				case 1:
+					strcpy(mMenuText[menu_index], "Render res          HALF-V FAST");
+					break;
+				case 2:
+					strcpy(mMenuText[menu_index], "Render res           INTERLACED");
+					break;
+				default:
+					strcpy(mMenuText[menu_index], "Render res            FULL 224p");
+					break;
+			}
+			break;
+
+		case VIDEO_SETTINGS_MENU_TRANSPARENCY:
+			sprintf(mMenuText[menu_index], "Transparency                %s", mMenuOptions->noTransparency ? "OFF" : " ON");
 			break;
 
 		case VIDEO_SETTINGS_MENU_FPS:
@@ -1062,6 +1136,14 @@ void AudioSettingsMenuUpdateText(s32 menu_index)
 		case AUDIO_SETTINGS_MENU_SOUND_STEREO:
 			sprintf(mMenuText[menu_index], "Stereo                      %s", mMenuOptions->stereo ? " ON" : "OFF");
 			break;
+
+		case AUDIO_SETTINGS_MENU_SOUND_ECHO:
+			sprintf(mMenuText[menu_index], "Sound echo                  %s", mMenuOptions->disableEcho ? "OFF" : " ON");
+			break;
+
+		case AUDIO_SETTINGS_MENU_SOUND_INTERP:
+			sprintf(mMenuText[menu_index], "Interpolation               %s", mMenuOptions->disableInterp ? "OFF" : " ON");
+			break;
 		// case SETTINGS_MENU_SOUND_VOL:
 		// 	sprintf(mMenuText[menu_index], "Volume:                     %d", mMenuOptions->volume);
 		// 	break;
@@ -1078,6 +1160,19 @@ void SettingsMenuUpdateText(s32 menu_index)
 
 		case AUDIO_MENU_SETTINGS:
 			strcpy(mMenuText[menu_index], "Audio Settings");
+			break;
+
+		case SETTINGS_MENU_CYCLES: {
+			unsigned int idx = mMenuOptions->cyclesMode < 6 ? mMenuOptions->cyclesMode : 0;
+			sprintf(mMenuText[menu_index], "SNES CPU cycles            %3u%%", mCyclesPct[idx]);
+			break;
+		}
+
+		case SETTINGS_MENU_CPU_CLOCK:
+			if (mMenuOptions->clockMhz == 0)
+				strcpy(mMenuText[menu_index], "RS-97 CPU clock          SYSTEM");
+			else
+				sprintf(mMenuText[menu_index], "RS-97 CPU clock         %3u MHz", mMenuOptions->clockMhz);
 			break;
 
 		case SETTINGS_MENU_AUTO_SAVE_SRAM:
@@ -1118,7 +1213,8 @@ void SettingsMenuUpdateTextAll(void)
 {
 	SettingsMenuUpdateText(VIDEO_MENU_SETTINGS);
 	SettingsMenuUpdateText(AUDIO_MENU_SETTINGS);
-//	SettingsMenuUpdateText(SETTINGS_MENU_CPU_SPEED);
+	SettingsMenuUpdateText(SETTINGS_MENU_CYCLES);
+	SettingsMenuUpdateText(SETTINGS_MENU_CPU_CLOCK);
 	SettingsMenuUpdateText(SETTINGS_MENU_SAVE_GLOBAL_SETTINGS);
 	SettingsMenuUpdateText(SETTINGS_MENU_SAVE_CURRENT_SETTINGS);
 	SettingsMenuUpdateText(SETTINGS_MENU_AUTO_SAVE_SRAM);
@@ -1131,6 +1227,8 @@ void AudioSettingsMenuUpdateTextAll(void)
 	AudioSettingsMenuUpdateText(AUDIO_SETTINGS_MENU_SOUND_ON);
 	AudioSettingsMenuUpdateText(AUDIO_SETTINGS_MENU_SOUND_STEREO);
 	AudioSettingsMenuUpdateText(AUDIO_SETTINGS_MENU_SOUND_RATE);
+	AudioSettingsMenuUpdateText(AUDIO_SETTINGS_MENU_SOUND_ECHO);
+	AudioSettingsMenuUpdateText(AUDIO_SETTINGS_MENU_SOUND_INTERP);
 	AudioSettingsMenuUpdateText(AUDIO_SETTINGS_MENU_SOUND_SYNC);
 }
 
@@ -1138,6 +1236,9 @@ static
 void VideoSettingsMenuUpdateTextAll(void)
 {
 	VideoSettingsMenuUpdateText(VIDEO_SETTINGS_MENU_FRAMESKIP);
+	VideoSettingsMenuUpdateText(VIDEO_SETTINGS_MENU_AUTOFSCAP);
+	VideoSettingsMenuUpdateText(VIDEO_SETTINGS_MENU_HALFRES);
+	VideoSettingsMenuUpdateText(VIDEO_SETTINGS_MENU_TRANSPARENCY);
 	VideoSettingsMenuUpdateText(VIDEO_SETTINGS_MENU_FPS);
 	VideoSettingsMenuUpdateText(VIDEO_SETTINGS_MENU_FULLSCREEN);
 }
@@ -1223,22 +1324,31 @@ s32 VideoSettingsMenu(void)
 		menuExit = (keys & INP_BUTTON_MENU_CANCEL);
 
 		if (keys & (SAL_INPUT_LEFT | SAL_INPUT_RIGHT)) {
+			int dir = (keys & SAL_INPUT_RIGHT) ? 1 : -1;
 			switch (menufocus) {
 				case VIDEO_SETTINGS_MENU_FRAMESKIP:
-					if (keys & SAL_INPUT_RIGHT) {
-						mMenuOptions->frameSkip++;
-						if (mMenuOptions->frameSkip > 6) mMenuOptions->frameSkip = 0;
-					} else {
-						mMenuOptions->frameSkip--;
-						if (mMenuOptions->frameSkip > 6) mMenuOptions->frameSkip = 6;
-					}
+					mMenuOptions->frameSkip = StepLookup(mFrameSkipOrder,
+						sizeof(mFrameSkipOrder) / sizeof(mFrameSkipOrder[0]),
+						mMenuOptions->frameSkip, dir);
+					break;
+
+				case VIDEO_SETTINGS_MENU_AUTOFSCAP:
+					mMenuOptions->autoFsCap = (mMenuOptions->autoFsCap + dir + 3) % 3;
+					break;
+
+				case VIDEO_SETTINGS_MENU_HALFRES:
+					mMenuOptions->halfRes = (mMenuOptions->halfRes + dir + 3) % 3;
+					break;
+
+				case VIDEO_SETTINGS_MENU_TRANSPARENCY:
+					mMenuOptions->noTransparency ^= 1;
 					break;
 
 				case VIDEO_SETTINGS_MENU_FPS:
 					mMenuOptions->showFps ^= 1;
 					break;
 
-				case VIDEO_SETTINGS_MENU_FULLSCREEN:
+				case VIDEO_SETTINGS_MENU_FULLSCREEN: {
 					int max_val = hwscale ? 4 : 2;
 					if (keys & SAL_INPUT_RIGHT) {
 						mMenuOptions->fullScreen++;
@@ -1248,6 +1358,7 @@ s32 VideoSettingsMenu(void)
 						if (mMenuOptions->fullScreen > max_val) mMenuOptions->fullScreen = max_val;
 					}
 					break;
+				}
 			}
 			VideoSettingsMenuUpdateText(menufocus);
 		}
@@ -1300,6 +1411,14 @@ s32 AudioSettingsMenu(void)
 
 				case AUDIO_SETTINGS_MENU_SOUND_STEREO:
 					mMenuOptions->stereo ^= 1;
+					break;
+
+				case AUDIO_SETTINGS_MENU_SOUND_ECHO:
+					mMenuOptions->disableEcho ^= 1;
+					break;
+
+				case AUDIO_SETTINGS_MENU_SOUND_INTERP:
+					mMenuOptions->disableInterp ^= 1;
 					break;
 
 				case AUDIO_SETTINGS_MENU_SOUND_SYNC:
@@ -1459,7 +1578,20 @@ s32 SettingsMenu(void)
 			}
 		}
 		else if (keys & (SAL_INPUT_LEFT | SAL_INPUT_RIGHT)) {
+			int dir = (keys & SAL_INPUT_RIGHT) ? 1 : -1;
 			switch (menufocus) {
+				case SETTINGS_MENU_CYCLES:
+					mMenuOptions->cyclesMode = StepLookup(mCyclesOrder,
+						sizeof(mCyclesOrder) / sizeof(mCyclesOrder[0]),
+						mMenuOptions->cyclesMode, dir);
+					break;
+
+				case SETTINGS_MENU_CPU_CLOCK:
+					mMenuOptions->clockMhz = StepLookup(mClockPresets,
+						sizeof(mClockPresets) / sizeof(mClockPresets[0]),
+						mMenuOptions->clockMhz, dir);
+					break;
+
 				case SETTINGS_MENU_AUTO_SAVE_SRAM:
 					mMenuOptions->autoSaveSram ^= 1;
 					break;
@@ -1539,7 +1671,7 @@ s32 MenuRun(s8 *romName)
 
 	hwscale = file_exists("/sys/devices/platform/jz-lcd.0/keep_aspect_ratio") || file_exists("/proc/jz/ipu");
 
-	sal_CpuSpeedSet(MENU_NORMAL_CPU_SPEED);
+	sal_CpuSpeedRestore();
 
 	if (sal_StringCompare(mRomName, romName) != 0) {
 		action = EVENT_LOAD_ROM;

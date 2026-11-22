@@ -3,8 +3,8 @@
 
 #include <sal.h>
 
-#define BUFFER_FRAMES 3
-// 48000 Hz maximum; 1/50 of a second; 3 frames to hold (2 plus a bit extra)
+#define BUFFER_FRAMES 4
+// 48000 Hz maximum; 1/50 of a second; 4 frames to hold (plus a bit extra)
 #define BUFFER_SAMPLES (48000 / 50 * (BUFFER_FRAMES + 1))
 
 static SDL_AudioSpec audiospec;
@@ -131,6 +131,22 @@ u32 sal_AudioGetFramesBuffered()
 	else
 		SamplesBuffered = BUFFER_SAMPLES - (LocalReadPos - LocalWritePos);
 	return SamplesBuffered / SamplesPerFrame;
+}
+
+u32 sal_AudioGetBufferFillPermille(void)
+{
+	u32 SamplesBuffered,
+	    LocalReadPos = ReadPos,
+	    LocalWritePos = WritePos;
+	if (!SamplesPerFrame)
+		return 1000;
+	if (LocalReadPos <= LocalWritePos)
+		SamplesBuffered = LocalWritePos - LocalReadPos;
+	else
+		SamplesBuffered = BUFFER_SAMPLES - (LocalReadPos - LocalWritePos);
+	u32 denom = SamplesPerFrame * BUFFER_FRAMES;
+	u32 permille = (SamplesBuffered * 1000u) / denom;
+	return permille > 1000u ? 1000u : permille;
 }
 
 u32 sal_AudioGetMinFrames()

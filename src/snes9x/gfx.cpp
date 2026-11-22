@@ -98,6 +98,23 @@
 #include "cheats.h"
 #include "screenshot.h"
 
+static inline void gfx_fill_bytes(void *dst, uint8 byteval, uint32 nbytes)
+{
+	memset(dst, byteval, nbytes);
+}
+
+static inline void gfx_fill_u32(void *dst, uint32 val32, uint32 nbytes)
+{
+	if (val32 == 0) {
+		memset(dst, 0, nbytes);
+		return;
+	}
+	uint32 *p = (uint32 *)dst;
+	uint32 *q = (uint32 *)((uint8 *)dst + nbytes);
+	while (p < q)
+		*p++ = val32;
+}
+
 #define M7 19
 #define M8 19
 
@@ -660,6 +677,10 @@ void S9xStartScreenRefresh ()
 		IPPU.PreviousLine = IPPU.CurrentLine = 0;
 		IPPU.MaxBrightness = PPU.Brightness;
 		IPPU.LatchedBlanking = PPU.ForcedBlanking;
+		if (GFX.HalfRes == 2)
+			GFX.HalfResParity ^= 1;
+		else
+			GFX.HalfResParity = 0;
 
 		if(PPU.BGMode == 5 || PPU.BGMode == 6)
 			IPPU.Interlace = (Memory.FillRAM[0x2133] & 1);
@@ -1329,7 +1350,13 @@ if(Settings.BGLayering) {
 	}
 	GFX.Z1 = D + 2;
 
-	for(uint32 Y=GFX.StartY, Offset=Y*GFX.PPL; Y<=GFX.EndY; Y++, Offset+=GFX.PPL){
+	uint32 obj_y0 = GFX.StartY;
+	uint32 obj_ystep = GFX.HalfRes ? 2 : 1;
+	uint32 obj_pplstep = GFX.HalfRes ? (GFX.PPL << 1) : GFX.PPL;
+	if (GFX.HalfRes && ((obj_y0 & 1) != GFX.HalfResParity))
+		obj_y0++;
+
+	for(uint32 Y=obj_y0, Offset=Y*GFX.PPL; Y<=GFX.EndY; Y+=obj_ystep, Offset+=obj_pplstep){
 #ifdef MK_DEBUG_RTO
 		bool8 Flag=0;
 #endif
@@ -1483,7 +1510,8 @@ static void DrawBackgroundMosaic (uint32 BGMode, uint32 bg, uint8 Z1, uint8 Z2)
 
 	int m5 = (BGMode == 5 || BGMode == 6) ? 1 : 0;
 
-    for (uint32 Y = GFX.StartY; Y <= GFX.EndY; Y += Lines)
+    uint32 StepLines;
+    for (uint32 Y = GFX.StartY; Y <= GFX.EndY; Y += StepLines)
     {
 	uint32 VOffset = LineData [Y].BG[bg].VOffset;
 	uint32 HOffset = LineData [Y].BG[bg].HOffset;
@@ -1498,6 +1526,17 @@ static void DrawBackgroundMosaic (uint32 BGMode, uint32 bg, uint8 Z1, uint8 Z2)
 
 	if (Y + Lines > GFX.EndY)
 	    Lines = GFX.EndY + 1 - Y;
+	StepLines = Lines;
+	uint32 drawY = Y;
+	if (GFX.HalfRes) {
+	    if ((drawY & 1) != GFX.HalfResParity) {
+		drawY++;
+		Lines--;
+		if (Lines == 0)
+		    continue;
+	    }
+	    Lines = (Lines + 1) >> 1;
+	}
 	uint32 VirtAlign = (MosaicLine & 7) << 3;
 	
 	uint16 *b1;
@@ -1538,7 +1577,7 @@ static void DrawBackgroundMosaic (uint32 BGMode, uint32 bg, uint8 Z1, uint8 Z2)
 		HPos = HOffset + Left;
 		PixWidth = (PPU.Mosaic << m5) - r;
 	    }
-	    uint32 s = Y * GFX.PPL + Left * GFX.PixSize;
+	    uint32 s = drawY * GFX.PPL + Left * GFX.PixSize;
 	    for (uint32 x = Left; x < Right; x += PixWidth, 
 		 s += (IPPU.HalfWidthPixels ? PixWidth >> 1 : PixWidth) * GFX.PixSize,
 		 HPos += PixWidth, PixWidth = (PPU.Mosaic << m5))
@@ -1733,6 +1772,8 @@ static void DrawBackgroundOffset (uint32 BGMode, uint32 bg, uint8 Z1, uint8 Z2)
 	
     for (uint32 Y = GFX.StartY; Y <= GFX.EndY; Y++)
     {
+		if (GFX.HalfRes && ((Y & 1) != GFX.HalfResParity))
+			continue;
 		uint32 VOff = LineData [Y].BG[2].VOffset - 1;
 //		uint32 VOff = LineData [Y].BG[2].VOffset;
 		uint32 HOff = LineData [Y].BG[2].HOffset;
@@ -2052,8 +2093,8 @@ static void DrawBackgroundMode5 (uint32 /* BGMODE */, uint32 bg, uint8 Z1, uint8
 		VOffsetShift = 3;
     }
     int endy = IPPU.Interlace ? 1 + (GFX.EndY << 1) : GFX.EndY;
-	
-    for (int Y = IPPU.Interlace ? GFX.StartY << 1 : GFX.StartY; Y <= endy; Y += Lines)
+	int StepLines;
+    for (int Y = IPPU.Interlace ? GFX.StartY << 1 : GFX.StartY; Y <= endy; Y += StepLines)
     {
 		int y = IPPU.Interlace ? (Y >> 1) : Y;
 		uint32 VOffset = LineData [y].BG[bg].VOffset;
@@ -2068,6 +2109,18 @@ static void DrawBackgroundMode5 (uint32 /* BGMODE */, uint32 bg, uint8 Z1, uint8
 			HOffset <<= 1;
 			if (Y + Lines > endy)
 				Lines = endy + 1 - Y;
+			StepLines = Lines;
+			int drawY = Y;
+			if (GFX.HalfRes) {
+				if ((drawY & 1) != GFX.HalfResParity) {
+					drawY++;
+					VirtAlign++;
+					Lines--;
+					if (Lines == 0)
+						continue;
+				}
+				Lines = (Lines + 1) >> 1;
+			}
 			VirtAlign <<= 3;
 			
 			int ScreenLine = (VOffset + Y) >> VOffsetShift;
@@ -2116,7 +2169,7 @@ static void DrawBackgroundMode5 (uint32 /* BGMODE */, uint32 bg, uint8 Z1, uint8
 						continue;
 				}
 				
-				uint32 s = (IPPU.HalfWidthPixels ? Left >> 1 : Left) * GFX.PixSize + Y * GFX.PPL;
+				uint32 s = (IPPU.HalfWidthPixels ? Left >> 1 : Left) * GFX.PixSize + drawY * GFX.PPL;
 				uint32 HPos = (HOffset + Left * GFX.PixSize) & 0x3ff;
 				
 				uint32 Quot = HPos >> 3;
@@ -2423,7 +2476,8 @@ static void DrawBackground (uint32 BGMode, uint32 bg, uint8 Z1, uint8 Z2)
 		OffsetShift = 3;
     }
 	
-    for (uint32 Y = GFX.StartY; Y <= GFX.EndY; Y += Lines)
+    uint32 StepLines;
+    for (uint32 Y = GFX.StartY; Y <= GFX.EndY; Y += StepLines)
     {
 		uint32 VOffset = LineData [Y].BG[bg].VOffset;
 		uint32 HOffset = LineData [Y].BG[bg].HOffset;
@@ -2436,6 +2490,18 @@ static void DrawBackground (uint32 BGMode, uint32 bg, uint8 Z1, uint8 Z2)
 			
 			if (Y + Lines > GFX.EndY)
 				Lines = GFX.EndY + 1 - Y;
+			StepLines = Lines;
+			uint32 drawY = Y;
+			if (GFX.HalfRes) {
+				if ((drawY & 1) != GFX.HalfResParity) {
+					drawY++;
+					VirtAlign++;
+					Lines--;
+					if (Lines == 0)
+						continue;
+				}
+				Lines = (Lines + 1) >> 1;
+			}
 			
 			VirtAlign <<= 3;
 			
@@ -2485,7 +2551,7 @@ static void DrawBackground (uint32 BGMode, uint32 bg, uint8 Z1, uint8 Z2)
 						continue;
 				}
 				
-				uint32 s = Left * GFX.PixSize + Y * GFX.PPL;
+				uint32 s = Left * GFX.PixSize + drawY * GFX.PPL;
 				uint32 HPos = (HOffset + Left) & OffsetMask;
 				
 				uint32 Quot = HPos >> 3;
@@ -2715,11 +2781,14 @@ static void DrawBackground (uint32 BGMode, uint32 bg, uint8 Z1, uint8 Z2)
     if (!ClipCount) \
 	ClipCount = 1; \
 \
-    Screen += GFX.StartY * GFX.Pitch; \
-    uint8 *Depth = GFX.DB + GFX.StartY * GFX.PPL; \
-    struct SLineMatrixData *l = &LineMatrixData [GFX.StartY]; \
+    uint32 m7_y0 = GFX.StartY; \
+    uint32 m7_ystep = GFX.HalfRes ? 2 : 1; \
+    if (GFX.HalfRes && ((m7_y0 & 1) != GFX.HalfResParity)) m7_y0++; \
+    Screen += m7_y0 * GFX.Pitch; \
+    uint8 *Depth = GFX.DB + m7_y0 * GFX.PPL; \
+    struct SLineMatrixData *l = &LineMatrixData [m7_y0]; \
 \
-    for (uint32 Line = GFX.StartY; Line <= GFX.EndY; Line++, Screen += GFX.Pitch, Depth += GFX.PPL, l++) \
+    for (uint32 Line = m7_y0; Line <= GFX.EndY; Line += m7_ystep, Screen += GFX.Pitch * m7_ystep, Depth += GFX.PPL * m7_ystep, l += m7_ystep) \
     { \
 	int yy; \
 \
@@ -2904,17 +2973,20 @@ static void DrawBGMode7Background16Sub1_2 (uint8 *Screen, int bg)
     if (!ClipCount) \
         ClipCount = 1; \
     \
-    Screen += GFX.StartY * GFX.Pitch; \
-    uint8 *Depth = GFX.DB + GFX.StartY * GFX.PPL; \
-    struct SLineMatrixData *l = &LineMatrixData [GFX.StartY]; \
+    uint32 m7_y0 = GFX.StartY; \
+    uint32 m7_ystep = GFX.HalfRes ? 2 : 1; \
+    if (GFX.HalfRes && ((m7_y0 & 1) != GFX.HalfResParity)) m7_y0++; \
+    Screen += m7_y0 * GFX.Pitch; \
+    uint8 *Depth = GFX.DB + m7_y0 * GFX.PPL; \
+    struct SLineMatrixData *l = &LineMatrixData [m7_y0]; \
     bool8 allowSimpleCase = FALSE; \
-    if (!l->MatrixB && !l->MatrixC && (l->MatrixA == 0x0100) && (l->MatrixD == 0x0100) \
+    if (m7_y0 <= GFX.EndY && !l->MatrixB && !l->MatrixC && (l->MatrixA == 0x0100) && (l->MatrixD == 0x0100) \
         && !LineMatrixData[GFX.EndY].MatrixB && !LineMatrixData[GFX.EndY].MatrixC \
         && (LineMatrixData[GFX.EndY].MatrixA == 0x0100) && (LineMatrixData[GFX.EndY].MatrixD == 0x0100) \
         ) \
         allowSimpleCase = TRUE;  \
     \
-    for (uint32 Line = GFX.StartY; Line <= GFX.EndY; Line++, Screen += GFX.Pitch, Depth += GFX.PPL, l++) \
+    for (uint32 Line = m7_y0; Line <= GFX.EndY; Line += m7_ystep, Screen += GFX.Pitch * m7_ystep, Depth += GFX.PPL * m7_ystep, l += m7_ystep) \
     { \
         int yy; \
         \
@@ -3775,14 +3847,16 @@ void S9xUpdateScreen ()
     }
 	
     uint32 black = BLACK | (BLACK << 16);
+    uint32 y0 = starty;
+    uint32 ystep = GFX.HalfRes ? 2 : 1;
+    if (GFX.HalfRes && ((y0 & 1) != GFX.HalfResParity))
+        y0++;
 
-    if (Settings.Transparency
 #ifndef FOREVER_16_BIT
-        && Settings.SixteenBit
+    if (Settings.SixteenBit)
 #endif
-        )
     {
-		if (GFX.Pseudo)
+		if (GFX.Pseudo && Settings.Transparency)
 		{
 			GFX.r2131 = 0x5f;
             GFX.r212c &= (Memory.FillRAM [0x212d] | 0xf0);
@@ -3790,7 +3864,7 @@ void S9xUpdateScreen ()
 			GFX.r2130 |= 2;
 		}
 
-		if (!PPU.ForcedBlanking && ADD_OR_SUB_ON_ANYTHING &&
+		if (Settings.Transparency && !PPU.ForcedBlanking && ADD_OR_SUB_ON_ANYTHING &&
 			(GFX.r2130 & 0x30) != 0x30 &&
 			!((GFX.r2130 & 0x30) == 0x10 && IPPU.Clip[1].Count[5] == 0))
 		{
@@ -3808,17 +3882,14 @@ void S9xUpdateScreen ()
 			if (pClip->Count [5])
 			{
 				// Colour window enabled.
-				for (uint32 y = starty; y <= endy; y++)
+				for (uint32 y = y0; y <= endy; y += ystep)
 				{
-					ZeroMemory (GFX.SubZBuffer + y * GFX.ZPitch, IPPU.RenderedScreenWidth);
-					ZeroMemory (GFX.ZBuffer + y * GFX.ZPitch, IPPU.RenderedScreenWidth);
+					gfx_fill_bytes (GFX.SubZBuffer + y * GFX.ZPitch, 0, IPPU.RenderedScreenWidth);
+					gfx_fill_bytes (GFX.ZBuffer + y * GFX.ZPitch, 0, IPPU.RenderedScreenWidth);
 
 					if (IPPU.Clip [0].Count [5])
 					{
-						uint32 *p = (uint32 *) (GFX.SubScreen + y * GFX.Pitch2);
-						uint32 *q = (uint32 *) ((uint16 *) p + IPPU.RenderedScreenWidth);
-						while (p < q)
-							*p++ = black;
+						gfx_fill_u32 (GFX.SubScreen + y * GFX.Pitch2, black, IPPU.RenderedScreenWidth << 1);
 					}
 
 					for (uint32 c = 0; c < pClip->Count [5]; c++)
@@ -3848,10 +3919,10 @@ void S9xUpdateScreen ()
 			}
 			else
 			{
-				for (uint32 y = starty; y <= endy; y++)
+				for (uint32 y = y0; y <= endy; y += ystep)
 				{
-					ZeroMemory (GFX.ZBuffer + y * GFX.ZPitch, IPPU.RenderedScreenWidth);
-					memset (GFX.SubZBuffer + y * GFX.ZPitch, 1, IPPU.RenderedScreenWidth);
+					gfx_fill_bytes (GFX.ZBuffer + y * GFX.ZPitch, 0, IPPU.RenderedScreenWidth);
+					gfx_fill_bytes (GFX.SubZBuffer + y * GFX.ZPitch, 1, IPPU.RenderedScreenWidth);
 					
 					if (IPPU.Clip [0].Count [5])
 					{
@@ -3861,11 +3932,7 @@ void S9xUpdateScreen ()
 						// 'underneath' to show through.
 						
 						uint32 b = GFX.FixedColour | (GFX.FixedColour << 16);
-						uint32 *p = (uint32 *) (GFX.SubScreen + y * GFX.Pitch2);
-						uint32 *q = (uint32 *) ((uint16 *) p + IPPU.RenderedScreenWidth);
-						
-						while (p < q)
-							*p++ = b;
+						gfx_fill_u32 (GFX.SubScreen + y * GFX.Pitch2, b, IPPU.RenderedScreenWidth << 1);
 					}
 				}
 			}
@@ -3878,7 +3945,7 @@ void S9xUpdateScreen ()
 
 			if (IPPU.Clip [0].Count [5])
 			{
-				for (uint32 y = starty; y <= endy; y++)
+				for (uint32 y = y0; y <= endy; y += ystep)
 				{
 					register uint16 *p = (uint16 *) (GFX.Screen + y * GFX.Pitch2);
 					register uint8 *d = GFX.SubZBuffer + y * GFX.ZPitch;
@@ -3907,7 +3974,7 @@ void S9xUpdateScreen ()
 				uint32 Count;
 
 				pClip = &IPPU.Clip [0];
-				for (uint32 y = starty; y <= endy; y++)
+				for (uint32 y = y0; y <= endy; y += ystep)
 				{
 					if (!(Count = pClip->Count [5]))
 					{
@@ -4085,7 +4152,7 @@ void S9xUpdateScreen ()
 
 				if (pClip->Count [5])
 				{
-					for (uint32 y = starty; y <= endy; y++)
+					for (uint32 y = y0; y <= endy; y += ystep)
 					{
 						for (uint32 b = 0; b < pClip->Count [5]; b++)
 						{
@@ -4108,7 +4175,7 @@ void S9xUpdateScreen ()
 				}
 				else
 				{
-					for (uint32 y = starty; y <= endy; y++)
+					for (uint32 y = y0; y <= endy; y += ystep)
 					{
 						uint16 *p = (uint16 *) (GFX.Screen + y * GFX.Pitch2);
 						uint8 *d = GFX.ZBuffer + y * GFX.ZPitch;
@@ -4127,8 +4194,7 @@ void S9xUpdateScreen ()
 		} //force blanking
 		else
 		{
-			// 16bit and transparency but currently no transparency effects in
-			// operation.
+			// 16bit and no transparency effects in operation.
 		
 			uint32 back = IPPU.ScreenColors [0] | (IPPU.ScreenColors [0] << 16);
 
@@ -4137,13 +4203,9 @@ void S9xUpdateScreen ()
 		
 			if (IPPU.Clip [0].Count[5])
 			{
-				for (uint32 y = starty; y <= endy; y++)
+				for (uint32 y = y0; y <= endy; y += ystep)
 				{
-					uint32 *p = (uint32 *) (GFX.Screen + y * GFX.Pitch2);
-					uint32 *q = (uint32 *) ((uint16 *) p + IPPU.RenderedScreenWidth);
-				
-					while (p < q)
-						*p++ = black;
+					gfx_fill_u32 (GFX.Screen + y * GFX.Pitch2, black, IPPU.RenderedScreenWidth << 1);
 				
 					for (uint32 c = 0; c < IPPU.Clip [0].Count [5]; c++)
 					{
@@ -4161,29 +4223,28 @@ void S9xUpdateScreen ()
 			}
 			else
 			{
-				for (uint32 y = starty; y <= endy; y++)
+				for (uint32 y = y0; y <= endy; y += ystep)
 				{
-					uint32 *p = (uint32 *) (GFX.Screen + y * GFX.Pitch2);
-					uint32 *q = (uint32 *) ((uint16 *) p + IPPU.RenderedScreenWidth);
-					while (p < q)
-						*p++ = back;
+					gfx_fill_u32 (GFX.Screen + y * GFX.Pitch2, back, IPPU.RenderedScreenWidth << 1);
 				}
 			}
 
 			if (!PPU.ForcedBlanking)
 			{
-				for (uint32 y = starty; y <= endy; y++)
+				for (uint32 y = y0; y <= endy; y += ystep)
 				{
-					ZeroMemory (GFX.ZBuffer + y * GFX.ZPitch, IPPU.RenderedScreenWidth);
+					gfx_fill_bytes (GFX.ZBuffer + y * GFX.ZPitch, 0, IPPU.RenderedScreenWidth);
 				}
 				GFX.DB = GFX.ZBuffer;
 				RenderScreen (GFX.Screen, FALSE, TRUE, SUB_SCREEN_DEPTH);
 			}
 		}
     }
+#ifndef FOREVER_16_BIT
     else
     {
     }
+#endif
 
     if (Settings.SupportHiRes)
     {

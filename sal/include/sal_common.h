@@ -77,6 +77,7 @@ void sal_AudioResume(void);
 void sal_AudioClose(void);
 void sal_AudioGenerate(u32 samples);
 u32 sal_AudioGetFramesBuffered();
+u32 sal_AudioGetBufferFillPermille(void);
 /* Suggested minimal number of frames of audio to be buffered.
  * Below this, the automatic frameskipper may skip frames. */
 u32 sal_AudioGetMinFrames();
@@ -92,6 +93,7 @@ u32 sal_AudioRatePrevious(u32 currRate);
 u32 sal_AudioRateNext(u32 currRate);
 
 void sal_CpuSpeedSet(u32 mhz);
+void sal_CpuSpeedRestore(void);
 u32 sal_CpuSpeedPrevious(u32 currSpeed);
 u32 sal_CpuSpeedNext(u32 currSpeed);
 u32 sal_CpuSpeedPreviousFast(u32 currSpeed);

@@ -119,11 +119,13 @@
 	ScreenColors = &IPPU.ScreenColors [(((Tile >> 10) & BG.PaletteMask) << BG.PaletteShift) + BG.StartPalette];
 
 #define RENDER_TILE(NORMAL, FLIPPED, N) \
+    const int tile_step = GFX.HalfRes ? 16 : 8; \
+    const uint32 ppl_step = GFX.HalfRes ? (GFX.PPL << 1) : GFX.PPL; \
     switch (Tile & (V_FLIP | H_FLIP)) \
     { \
     case 0: \
 	bp = pCache + StartLine; \
-	for (l = LineCount; l != 0; l--, bp += 8, Offset += GFX.PPL) \
+	for (l = LineCount; l != 0; l--, bp += tile_step, Offset += ppl_step) \
 	{ \
 	    if (*(uint32 *) bp) NORMAL (Offset, bp, ScreenColors); \
 	    if (*(uint32 *) (bp + 4)) NORMAL (Offset + N, bp + 4, ScreenColors); \
@@ -131,7 +133,7 @@
         break; \
     case H_FLIP: \
 	bp = pCache + StartLine; \
-	for (l = LineCount; l != 0; l--, bp += 8, Offset += GFX.PPL) \
+	for (l = LineCount; l != 0; l--, bp += tile_step, Offset += ppl_step) \
 	{ \
 	    if (*(uint32 *) (bp + 4)) FLIPPED (Offset, bp + 4, ScreenColors); \
 	    if (*(uint32 *) bp) FLIPPED (Offset + N, bp, ScreenColors); \
@@ -139,7 +141,7 @@
         break; \
     case H_FLIP | V_FLIP: \
 	bp = pCache + 56 - StartLine; \
-	for (l = LineCount; l != 0; l--, bp -= 8, Offset += GFX.PPL) \
+	for (l = LineCount; l != 0; l--, bp -= tile_step, Offset += ppl_step) \
 	{ \
 	    if (*(uint32 *) (bp + 4)) FLIPPED (Offset, bp + 4, ScreenColors); \
 	    if (*(uint32 *) bp) FLIPPED (Offset + N, bp, ScreenColors); \
@@ -147,7 +149,7 @@
         break; \
     case V_FLIP: \
 	bp = pCache + 56 - StartLine; \
-	for (l = LineCount; l != 0; l--, bp -= 8, Offset += GFX.PPL) \
+	for (l = LineCount; l != 0; l--, bp -= tile_step, Offset += ppl_step) \
 	{ \
 	    if (*(uint32 *) bp) NORMAL (Offset, bp, ScreenColors); \
 	    if (*(uint32 *) (bp + 4)) NORMAL (Offset + N, bp + 4, ScreenColors); \
@@ -189,11 +191,13 @@
 
 #define RENDER_CLIPPED_TILE(NORMAL, FLIPPED, N) \
     uint32 dd; \
+    const int tile_step = GFX.HalfRes ? 16 : 8; \
+    const uint32 ppl_step = GFX.HalfRes ? (GFX.PPL << 1) : GFX.PPL; \
     switch (Tile & (V_FLIP | H_FLIP)) \
     { \
     case 0: \
 	bp = pCache + StartLine; \
-	for (l = LineCount; l != 0; l--, bp += 8, Offset += GFX.PPL) \
+	for (l = LineCount; l != 0; l--, bp += tile_step, Offset += ppl_step) \
 	{ \
             /* This is perfectly OK, regardless of endian. The tiles are \
              * cached in leftmost-endian order (when not horiz flipped) by \
@@ -209,7 +213,7 @@
 	bp = pCache + StartLine; \
 	SWAP_DWORD (d1); \
 	SWAP_DWORD (d2); \
-	for (l = LineCount; l != 0; l--, bp += 8, Offset += GFX.PPL) \
+	for (l = LineCount; l != 0; l--, bp += tile_step, Offset += ppl_step) \
 	{ \
 	    if ((dd = *(uint32 *) (bp + 4) & d1)) \
 		FLIPPED (Offset, (uint8 *) &dd, ScreenColors); \
@@ -221,7 +225,7 @@
 	bp = pCache + 56 - StartLine; \
 	SWAP_DWORD (d1); \
 	SWAP_DWORD (d2); \
-	for (l = LineCount; l != 0; l--, bp -= 8, Offset += GFX.PPL) \
+	for (l = LineCount; l != 0; l--, bp -= tile_step, Offset += ppl_step) \
 	{ \
 	    if ((dd = *(uint32 *) (bp + 4) & d1)) \
 		FLIPPED (Offset, (uint8 *) &dd, ScreenColors); \
@@ -231,7 +235,7 @@
         break; \
     case V_FLIP: \
 	bp = pCache + 56 - StartLine; \
-	for (l = LineCount; l != 0; l--, bp -= 8, Offset += GFX.PPL) \
+	for (l = LineCount; l != 0; l--, bp -= tile_step, Offset += ppl_step) \
 	{ \
 	    if ((dd = (*(uint32 *) bp) & d1)) \
 		NORMAL (Offset, (uint8 *) &dd, ScreenColors); \
@@ -244,6 +248,7 @@
     }
 
 #define RENDER_TILE_LARGE(PIXEL, FUNCTION) \
+    const uint32 ppl_step = GFX.HalfRes ? (GFX.PPL << 1) : GFX.PPL; \
     switch (Tile & (V_FLIP | H_FLIP)) \
     { \
     case H_FLIP: \
@@ -253,7 +258,7 @@
 	if ((pixel = *(pCache + StartLine + StartPixel))) \
 	{ \
 	    pixel = PIXEL; \
-	    for (l = LineCount; l != 0; l--, sp += GFX.PPL, Depth += GFX.PPL) \
+	    for (l = LineCount; l != 0; l--, sp += ppl_step, Depth += ppl_step) \
 	    { \
 		for (int z = Pixels - 1; z >= 0; z--) \
 		    if (GFX.Z1 > Depth [z]) \
@@ -271,7 +276,7 @@
 	if ((pixel = *(pCache + 56 - StartLine + StartPixel))) \
 	{ \
 	    pixel = PIXEL; \
-	    for (l = LineCount; l != 0; l--, sp += GFX.PPL, Depth += GFX.PPL) \
+	    for (l = LineCount; l != 0; l--, sp += ppl_step, Depth += ppl_step) \
 	    { \
 		for (int z = Pixels - 1; z >= 0; z--) \
 		    if (GFX.Z1 > Depth [z]) \
@@ -287,6 +292,7 @@
     }
 
 #define RENDER_TILE_LARGE_HALFWIDTH(PIXEL, FUNCTION) \
+    const uint32 ppl_step = GFX.HalfRes ? (GFX.PPL << 1) : GFX.PPL; \
     switch (Tile & (V_FLIP | H_FLIP)) \
     { \
     case H_FLIP: \
@@ -296,7 +302,7 @@
 	if ((pixel = *(pCache + StartLine + StartPixel))) \
 	{ \
 	    pixel = PIXEL; \
-	    for (l = LineCount; l != 0; l--, sp += GFX.PPL, Depth += GFX.PPL) \
+	    for (l = LineCount; l != 0; l--, sp += ppl_step, Depth += ppl_step) \
 	    { \
 		for (int z = Pixels - 2; z >= 0; z -= 2) \
 		    if (GFX.Z1 > Depth [z]) \
@@ -314,7 +320,7 @@
 	if ((pixel = *(pCache + 56 - StartLine + StartPixel))) \
 	{ \
 	    pixel = PIXEL; \
-	    for (l = LineCount; l != 0; l--, sp += GFX.PPL, Depth += GFX.PPL) \
+	    for (l = LineCount; l != 0; l--, sp += ppl_step, Depth += ppl_step) \
 	    { \
 		for (int z = Pixels - 2; z >= 0; z -= 2) \
 		    if (GFX.Z1 > Depth [z]) \

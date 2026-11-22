@@ -113,8 +113,44 @@ const char* sal_DirectoryGetTemp(void)
 	return "/tmp";
 }
 
+static u32 mOrigCpuMhz = 0;
+static u32 mCurCpuMhz = 0;
+
+static void sal_CpuSpeedCaptureOrig(void)
+{
+	if (mOrigCpuMhz != 0)
+		return;
+	FILE *f = fopen("/proc/jz/clock", "r");
+	if (!f)
+		return;
+	unsigned int mhz = 0;
+	if (fscanf(f, "%u", &mhz) == 1 && mhz >= 240 && mhz <= 816) {
+		mOrigCpuMhz = mhz;
+		mCurCpuMhz = mhz;
+	}
+	fclose(f);
+}
+
 void sal_CpuSpeedSet(u32 mhz)
 {
+	sal_CpuSpeedCaptureOrig();
+	if (mOrigCpuMhz == 0)
+		return;
+	u32 target = (mhz == 0) ? mOrigCpuMhz : mhz;
+	if (target < 240 || target > 678 || target == mCurCpuMhz)
+		return;
+	FILE *f = fopen("/proc/jz/clock", "w");
+	if (!f)
+		return;
+	fprintf(f, "%u\n", target);
+	fclose(f);
+	mCurCpuMhz = target;
+}
+
+void sal_CpuSpeedRestore(void)
+{
+	if (mOrigCpuMhz != 0)
+		sal_CpuSpeedSet(mOrigCpuMhz);
 }
 
 u32 sal_CpuSpeedNext(u32 currSpeed)
@@ -283,6 +319,7 @@ void sal_VideoPaletteSet(u32 index, u32 color)
 
 void sal_Reset(void)
 {
+	sal_CpuSpeedRestore();
 	for(int j = 0; j < SDL_NumJoysticks(); j++)
 		SDL_JoystickClose(joy[j]);
 	sal_AudioClose();

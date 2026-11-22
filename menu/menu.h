@@ -15,10 +15,10 @@
 #define SAVESTATE_MODE_LOAD			1
 #define SAVESTATE_MODE_DELETE		2
 
-#define POCKETSNES_VERSION			"version 2"
+#define POCKETSNES_VERSION			"PocketSNES+ v2"
 
-#define MENU_NORMAL_CPU_SPEED 		336
-#define MENU_FAST_CPU_SPEED			336
+#define MENU_NORMAL_CPU_SPEED 		0
+#define MENU_FAST_CPU_SPEED			0
 
 enum  MENU_ENUM
 {
@@ -35,6 +35,8 @@ enum SETTINGS_MENU_ENUM
 {
 	VIDEO_MENU_SETTINGS = 0,
 	AUDIO_MENU_SETTINGS,
+	SETTINGS_MENU_CYCLES,
+	SETTINGS_MENU_CPU_CLOCK,
 	SETTINGS_MENU_AUTO_SAVE_SRAM,
 	SETTINGS_MENU_SAVE_CURRENT_SETTINGS,
 	SETTINGS_MENU_SAVE_GLOBAL_SETTINGS,
@@ -48,6 +50,8 @@ enum AUDIO_SETTINGS_MENU_ENUM
 //	AUDIO_SETTINGS_MENU_SOUND_VOL,
 	AUDIO_SETTINGS_MENU_SOUND_RATE,
 	AUDIO_SETTINGS_MENU_SOUND_STEREO,
+	AUDIO_SETTINGS_MENU_SOUND_ECHO,
+	AUDIO_SETTINGS_MENU_SOUND_INTERP,
 	AUDIO_SETTINGS_MENU_SOUND_SYNC,
 	AUDIO_SETTINGS_MENU_COUNT
 };
@@ -55,7 +59,10 @@ enum AUDIO_SETTINGS_MENU_ENUM
 enum VIDEO_SETTINGS_MENU_ENUM
 {
 	VIDEO_SETTINGS_MENU_FULLSCREEN = 0,
+	VIDEO_SETTINGS_MENU_HALFRES,
+	VIDEO_SETTINGS_MENU_TRANSPARENCY,
 	VIDEO_SETTINGS_MENU_FRAMESKIP,
+	VIDEO_SETTINGS_MENU_AUTOFSCAP,
 	VIDEO_SETTINGS_MENU_FPS,
 	VIDEO_SETTINGS_MENU_COUNT
 };
@@ -127,13 +134,13 @@ struct MENU_OPTIONS
   unsigned int cpuSpeed;
   unsigned int soundRate;
   unsigned int soundSync;
-  unsigned int spare02;
-  unsigned int spare03;
-  unsigned int spare04;
-  unsigned int spare05;
-  unsigned int spare06;
-  unsigned int spare07;
-  unsigned int spare08;
+  unsigned int halfRes;        /* spare02: 0=Full 224p, 1=Half-V Fast, 2=Interlaced */
+  unsigned int noTransparency; /* spare03: 0=Transparency ON, 1=OFF */
+  unsigned int autoFsCap;      /* spare04: 0=Smooth(Max 1), 1=Balanced(Max 2), 2=Legacy(Max 5) */
+  unsigned int disableEcho;    /* spare05: 0=Echo ON, 1=OFF */
+  unsigned int disableInterp;  /* spare06: 0=Interp ON, 1=OFF */
+  unsigned int cyclesMode;     /* spare07: 0=100%, 1=115%, 2=130%, 3=150%, 4=75%, 5=85% */
+  unsigned int clockMhz;       /* spare08: 0=SYSTEM, or 528..678 MHz */
   unsigned int spare09;
 
 };
