@@ -120,12 +120,13 @@ static inline void S9xSA1MainLoopInline ()
         else
             SA1.Flags &= ~IRQ_PENDING_FLAG;
     }
-    for (int i = 0; i < 3 && SA1.Executing; i++)
+    /* Caller verified SA1.Executing != 0; unroll 3 SA-1 ops and omit dead SA1.PCAtOpcodeStart write. */
+    (*SA1.S9xOpcodes [*SA1.PC++].S9xOpcode) ();
+    if (__builtin_expect(SA1.Executing, 1))
     {
-#ifdef CPU_SHUTDOWN
-        SA1.PCAtOpcodeStart = SA1.PC;
-#endif
         (*SA1.S9xOpcodes [*SA1.PC++].S9xOpcode) ();
+        if (__builtin_expect(SA1.Executing, 1))
+            (*SA1.S9xOpcodes [*SA1.PC++].S9xOpcode) ();
     }
 }
 
@@ -292,7 +293,7 @@ void S9xMainLoop_SA1_NoSFX (void)
 
     	(*ICPU.S9xOpcodes [*CPU.PC++].S9xOpcode) ();
 	
-    	if (SA1.Executing)
+    	if (__builtin_expect(SA1.Executing, 1))
     	    S9xSA1MainLoopInline ();
     	DO_HBLANK_CHECK_NoSFX();
     }

@@ -147,8 +147,19 @@ void S9xSA1Reset ()
     S9xSA1UnpackStatus();
     S9xSA1FixCycles ();
     SA1.Executing = TRUE;
-    SA1.BWRAM = Memory.SRAM;
     Memory.FillRAM [0x2225] = 0;
+    S9xSA1SetBWRAMMemMap (0);
+}
+
+void S9xSNESSetBWRAMMemMap (uint8 val)
+{
+    Memory.BWRAM = Memory.SRAM + (val & 7) * 0x2000;
+    uint8 *bw_ptr = Memory.BWRAM - 0x6000;
+    for (int c = 0; c < 0x400; c += 16)
+    {
+	Memory.Map [c + 6] = Memory.Map [c + 0x806] = bw_ptr;
+	Memory.Map [c + 7] = Memory.Map [c + 0x807] = bw_ptr;
+    }
 }
 
 void S9xSA1SetBWRAMMemMap (uint8 val)
@@ -168,14 +179,15 @@ void S9xSA1SetBWRAMMemMap (uint8 val)
     }
     else
     {
+	SA1.BWRAM = Memory.SRAM + (val & 7) * 0x2000;
+	uint8 *bw_ptr = SA1.BWRAM - 0x6000;
 	for (c = 0; c < 0x400; c += 16)
 	{
-	    SA1.Map [c + 6] = SA1.Map [c + 0x806] = (uint8 *) CMemory::MAP_BWRAM;
-	    SA1.Map [c + 7] = SA1.Map [c + 0x807] = (uint8 *) CMemory::MAP_BWRAM;
-	    SA1.WriteMap [c + 6] = SA1.WriteMap [c + 0x806] = (uint8 *) CMemory::MAP_BWRAM;
-	    SA1.WriteMap [c + 7] = SA1.WriteMap [c + 0x807] = (uint8 *) CMemory::MAP_BWRAM;
+	    SA1.Map [c + 6] = SA1.Map [c + 0x806] = bw_ptr;
+	    SA1.Map [c + 7] = SA1.Map [c + 0x807] = bw_ptr;
+	    SA1.WriteMap [c + 6] = SA1.WriteMap [c + 0x806] = bw_ptr;
+	    SA1.WriteMap [c + 7] = SA1.WriteMap [c + 0x807] = bw_ptr;
 	}
-	SA1.BWRAM = Memory.SRAM + (val & 7) * 0x2000;
     }
 }
 
@@ -188,7 +200,7 @@ void S9xFixSA1AfterSnapshotLoad ()
     S9xSA1UnpackStatus ();
     S9xSA1FixCycles ();
     SA1.VirtualBitmapFormat = (Memory.FillRAM [0x223f] & 0x80) ? 2 : 4;
-    Memory.BWRAM = Memory.SRAM + (Memory.FillRAM [0x2224] & 7) * 0x2000;
+    S9xSNESSetBWRAMMemMap (Memory.FillRAM [0x2224]);
     S9xSA1SetBWRAMMemMap (Memory.FillRAM [0x2225]);
 
     SA1.Waiting = (Memory.FillRAM [0x2200] & 0x60) != 0;
@@ -286,6 +298,18 @@ void S9xSA1SetByteSlow (uint8 byte, uint32 address)
     default:
 	return;
     }
+}
+
+uint16 S9xSA1GetWordSlow (uint32 address)
+{
+    OpenBus = S9xSA1GetByte (address);
+    return (uint16)OpenBus | ((uint16)S9xSA1GetByte (address + 1) << 8);
+}
+
+void S9xSA1SetWordSlow (uint16 Word, uint32 address)
+{
+    S9xSA1SetByte ((uint8) Word, address);
+    S9xSA1SetByte ((uint8) (Word >> 8), address + 1);
 }
 
 void S9xSA1SetPCBase (uint32 address)
@@ -614,7 +638,7 @@ void S9xSetSA1 (uint8 byte, uint32 address)
 	break;
     case 0x2224:
 //	printf ("BWRAM image SNES %02x -> 0x6000\n", byte);
-	Memory.BWRAM = Memory.SRAM + (byte & 7) * 0x2000;
+	S9xSNESSetBWRAMMemMap (byte);
 	break;
     case 0x2225:
 //	printf ("BWRAM image SA1 %02x -> 0x6000 (%02x)\n", byte, Memory.FillRAM [address]);

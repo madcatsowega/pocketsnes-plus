@@ -4499,3 +4499,236 @@ void CMemory::ParseSNESHeader(uint8* RomHeader)
 #define INLINE
 #include "getset.h"
 
+
+uint8 S9xGetByteSlow (uint32 Address, uint8 *GetAddress)
+{
+    switch ((intptr_t) GetAddress)
+    {
+    case CMemory::MAP_PPU:
+		return (S9xGetPPU (Address & 0xffff));
+    case CMemory::MAP_CPU:
+		return (S9xGetCPU (Address & 0xffff));
+    case CMemory::MAP_DSP:
+		return (S9xGetDSP (Address & 0xffff));
+    case CMemory::MAP_SA1RAM:
+    case CMemory::MAP_LOROM_SRAM:
+		return (*(Memory.SRAM + ((((Address&0xFF0000)>>1) |(Address&0x7FFF)) &Memory.SRAMMask)));
+    case CMemory::MAP_RONLY_SRAM:
+    case CMemory::MAP_HIROM_SRAM:
+		return (*(Memory.SRAM + (((Address & 0x7fff) - 0x6000 +
+			((Address & 0xf0000) >> 3)) & Memory.SRAMMask)));
+    case CMemory::MAP_BWRAM:
+		return (*(Memory.BWRAM + ((Address & 0x7fff) - 0x6000)));
+    case CMemory::MAP_C4:
+		return (S9xGetC4 (Address & 0xffff));
+    case CMemory::MAP_SPC7110_ROM:
+		return S9xGetSPC7110Byte(Address);
+    case CMemory::MAP_SPC7110_DRAM:
+		return S9xGetSPC7110(0x4800);
+    case CMemory::MAP_OBC_RAM:
+		return GetOBC1(Address & 0xffff);
+    case CMemory::MAP_SETA_DSP:
+		return S9xGetSetaDSP(Address);
+    case CMemory::MAP_SETA_RISC:
+		return S9xGetST018(Address);
+    case CMemory::MAP_DEBUG:
+    default:
+    case CMemory::MAP_NONE:
+		return OpenBus;
+    }
+}
+
+uint16 S9xGetWordCross (uint32 Address)
+{
+    OpenBus = S9xGetByte (Address);
+    return (uint16)OpenBus | ((uint16)S9xGetByte (Address + 1) << 8);
+}
+
+uint16 S9xGetWordSlow (uint32 Address, uint8 *GetAddress)
+{
+    switch ((intptr_t) GetAddress)
+    {
+    case CMemory::MAP_PPU:
+		return (S9xGetPPU (Address & 0xffff) |
+			(S9xGetPPU ((Address + 1) & 0xffff) << 8));
+    case CMemory::MAP_CPU:
+		return (S9xGetCPU (Address & 0xffff) |
+			(S9xGetCPU ((Address + 1) & 0xffff) << 8));
+    case CMemory::MAP_DSP:
+		return (S9xGetDSP (Address & 0xffff) |
+			(S9xGetDSP ((Address + 1) & 0xffff) << 8));
+    case CMemory::MAP_SA1RAM:
+    case CMemory::MAP_LOROM_SRAM:
+		return
+			(*(Memory.SRAM + ((((Address&0xFF0000)>>1) |(Address&0x7FFF)) &Memory.SRAMMask)))|
+			((*(Memory.SRAM + (((((Address+1)&0xFF0000)>>1) |((Address+1)&0x7FFF)) &Memory.SRAMMask)))<<8);
+    case CMemory::MAP_RONLY_SRAM:
+    case CMemory::MAP_HIROM_SRAM:
+		return (*(Memory.SRAM +
+			(((Address & 0x7fff) - 0x6000 +
+			((Address & 0xf0000) >> 3)) & Memory.SRAMMask)) |
+			(*(Memory.SRAM +
+			((((Address + 1) & 0x7fff) - 0x6000 +
+			(((Address + 1) & 0xf0000) >> 3)) & Memory.SRAMMask)) << 8));
+    case CMemory::MAP_BWRAM:
+		return (*(Memory.BWRAM + ((Address & 0x7fff) - 0x6000)) |
+			(*(Memory.BWRAM + (((Address + 1) & 0x7fff) - 0x6000)) << 8));
+    case CMemory::MAP_C4:
+		return (S9xGetC4 (Address & 0xffff) |
+			(S9xGetC4 ((Address + 1) & 0xffff) << 8));
+    case CMemory::MAP_SPC7110_ROM:
+		return (S9xGetSPC7110Byte(Address) |
+			(S9xGetSPC7110Byte (Address + 1) << 8));
+    case CMemory::MAP_SPC7110_DRAM:
+		return (S9xGetSPC7110(0x4800) |
+			(S9xGetSPC7110 (0x4800) << 8));
+    case CMemory::MAP_OBC_RAM:
+		return GetOBC1(Address & 0xFFFF) | (GetOBC1((Address + 1) & 0xFFFF) << 8);
+    case CMemory::MAP_SETA_DSP:
+		return S9xGetSetaDSP(Address) | (S9xGetSetaDSP(Address + 1) << 8);
+    case CMemory::MAP_SETA_RISC:
+		return S9xGetST018(Address) | (S9xGetST018(Address + 1) << 8);
+    case CMemory::MAP_DEBUG:
+    default:
+    case CMemory::MAP_NONE:
+		return (OpenBus | (OpenBus << 8));
+    }
+}
+
+void S9xSetByteSlow (uint8 Byte, uint32 Address, uint8 *SetAddress)
+{
+    switch ((intptr_t) SetAddress)
+    {
+    case CMemory::MAP_PPU:
+		S9xSetPPU (Byte, Address & 0xffff);
+		return;
+    case CMemory::MAP_CPU:
+		S9xSetCPU (Byte, Address & 0xffff);
+		return;
+    case CMemory::MAP_DSP:
+		S9xSetDSP (Byte, Address & 0xffff);
+		return;
+    case CMemory::MAP_LOROM_SRAM:
+		if (Memory.SRAMMask)
+		{
+			*(Memory.SRAM + ((((Address&0xFF0000)>>1)|(Address&0x7FFF))& Memory.SRAMMask)) = Byte;
+			CPU.SRAMModified = TRUE;
+		}
+		return;
+    case CMemory::MAP_HIROM_SRAM:
+		if (Memory.SRAMMask)
+		{
+			*(Memory.SRAM + (((Address & 0x7fff) - 0x6000 +
+				((Address & 0xf0000) >> 3)) & Memory.SRAMMask)) = Byte;
+			CPU.SRAMModified = TRUE;
+		}
+		return;
+    case CMemory::MAP_BWRAM:
+		*(Memory.BWRAM + ((Address & 0x7fff) - 0x6000)) = Byte;
+		CPU.SRAMModified = TRUE;
+		return;
+    case CMemory::MAP_DEBUG:
+    case CMemory::MAP_SA1RAM:
+		*(Memory.SRAM + (Address & 0xffff)) = Byte;
+		SA1.Executing = !SA1.Waiting;
+		return;
+    case CMemory::MAP_C4:
+		S9xSetC4 (Byte, Address & 0xffff);
+		return;
+    case CMemory::MAP_SPC7110_DRAM:
+		s7r.bank50[(Address & 0xffff)] = (uint8) Byte;
+		return;
+    case CMemory::MAP_OBC_RAM:
+		SetOBC1(Byte, Address & 0xFFFF);
+		return;
+    case CMemory::MAP_SETA_DSP:
+		S9xSetSetaDSP(Byte, Address);
+		return;
+    case CMemory::MAP_SETA_RISC:
+		S9xSetST018(Byte, Address);
+		return;
+    default:
+    case CMemory::MAP_NONE:
+		return;
+    }
+}
+
+void S9xSetWordCross (uint16 Word, uint32 Address)
+{
+    S9xSetByte ((uint8) Word, Address);
+    S9xSetByte ((uint8) (Word >> 8), Address + 1);
+}
+
+void S9xSetWordSlow (uint16 Word, uint32 Address, uint8 *SetAddress)
+{
+    switch ((intptr_t) SetAddress)
+    {
+    case CMemory::MAP_PPU:
+		S9xSetPPU ((uint8) Word, Address & 0xffff);
+		S9xSetPPU (Word >> 8, (Address & 0xffff) + 1);
+		return;
+    case CMemory::MAP_CPU:
+		S9xSetCPU ((uint8) Word, Address & 0xffff);
+		S9xSetCPU (Word >> 8, (Address & 0xffff) + 1);
+		return;
+    case CMemory::MAP_DSP:
+		S9xSetDSP ((uint8) Word, Address & 0xffff);
+		S9xSetDSP (Word >> 8, (Address & 0xffff) + 1);
+		return;
+    case CMemory::MAP_LOROM_SRAM:
+		if (Memory.SRAMMask)
+		{
+			*(Memory.SRAM + ((((Address&0xFF0000)>>1)|(Address&0x7FFF))& Memory.SRAMMask)) = (uint8) Word;
+			*(Memory.SRAM + (((((Address+1)&0xFF0000)>>1)|((Address+1)&0x7FFF))& Memory.SRAMMask)) = Word >> 8;
+			CPU.SRAMModified = TRUE;
+		}
+		return;
+    case CMemory::MAP_HIROM_SRAM:
+		if (Memory.SRAMMask)
+		{
+			*(Memory.SRAM +
+				(((Address & 0x7fff) - 0x6000 +
+				((Address & 0xf0000) >> 3) & Memory.SRAMMask))) = (uint8) Word;
+			*(Memory.SRAM +
+				((((Address + 1) & 0x7fff) - 0x6000 +
+				(((Address + 1) & 0xf0000) >> 3) & Memory.SRAMMask))) = (uint8) (Word >> 8);
+			CPU.SRAMModified = TRUE;
+		}
+		return;
+    case CMemory::MAP_BWRAM:
+		*(Memory.BWRAM + ((Address & 0x7fff) - 0x6000)) = (uint8) Word;
+		*(Memory.BWRAM + (((Address + 1) & 0x7fff) - 0x6000)) = (uint8) (Word >> 8);
+		CPU.SRAMModified = TRUE;
+		return;
+    case CMemory::MAP_DEBUG:
+    case CMemory::MAP_SPC7110_DRAM:
+		s7r.bank50[(Address & 0xffff)] = (uint8) Word;
+		s7r.bank50[((Address + 1) & 0xffff)] = (uint8) Word;
+		return;
+    case CMemory::MAP_SA1RAM:
+		*(Memory.SRAM + (Address & 0xffff)) = (uint8) Word;
+		*(Memory.SRAM + ((Address + 1) & 0xffff)) = (uint8) (Word >> 8);
+		SA1.Executing = !SA1.Waiting;
+		return;
+    case CMemory::MAP_C4:
+		S9xSetC4 (Word & 0xff, Address & 0xffff);
+		S9xSetC4 ((uint8) (Word >> 8), (Address + 1) & 0xffff);
+		return;
+    case CMemory::MAP_OBC_RAM:
+		SetOBC1(Word & 0xff, Address & 0xFFFF);
+		SetOBC1((uint8) (Word >> 8), (Address + 1) & 0xffff);
+		return;
+    case CMemory::MAP_SETA_DSP:
+		S9xSetSetaDSP (Word & 0xff, Address);
+		S9xSetSetaDSP ((uint8) (Word >> 8), Address + 1);
+		return;
+    case CMemory::MAP_SETA_RISC:
+		S9xSetST018 (Word & 0xff, Address);
+		S9xSetST018 ((uint8) (Word >> 8), Address + 1);
+		return;
+    default:
+    case CMemory::MAP_NONE:
+		return;
+    }
+}
+

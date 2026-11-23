@@ -252,6 +252,43 @@ extern uint8 mul_brightness [16][32];
 #define SUB_SCREEN_DEPTH 0
 #define MAIN_SCREEN_DEPTH 32
 
+#if !defined(GFX_MULTI_FORMAT) && defined(PIXEL_FORMAT) && !defined(OLD_COLOUR_BLENDING)
+// Zero-memory branchless SWAR RGB565 color math (eliminates 3x 128 KB LUTs
+// GFX.X2 / GFX.ZERO / GFX.ZERO_OR_X2 that thrash the JZ4760B 16 KB L1 D-cache).
+// Exhaustively verified 0/65536 diffs against all three tables for RGB565.
+static inline uint16 COLOR_ADD (uint16 C1, uint16 C2)
+{
+	uint32 x = (((C1 & 0xF7DEu) + (C2 & 0xF7DEu)) >> 1) + (C1 & C2 & 0x0821u);
+	uint32 ov = x & 0x8410u;
+	uint32 sat = ((ov << 1) - (ov >> 4)) | ((ov & 0x0400u) >> 5);
+	return (uint16)((((x & ~ov) << 1) | sat) | ((C1 ^ C2) & 0x0821u));
+}
+
+#define COLOR_ADD1_2(C1, C2) \
+(((((C1) & RGB_REMOVE_LOW_BITS_MASK) + \
+          ((C2) & RGB_REMOVE_LOW_BITS_MASK)) >> 1) + \
+         ((C1) & (C2) & RGB_LOW_BITS_MASK) | ALPHA_BITS_MASK)
+
+static inline uint16 COLOR_SUB (uint16 C1, uint16 C2)
+{
+	uint32 x = (((uint32)C1 | 0x10820u) - ((uint32)C2 & 0xF7DEu)) >> 1;
+	uint32 hi = x & 0x8410u;
+	uint32 mask = ((hi << 1) - (hi >> 4)) | ((hi & 0x0400u) >> 5);
+	uint32 v = (((x & mask) & ~hi) << 1) & 0xFFFFu;
+	if ((v & 0xF800u) == 0) v |= 0x0800u;
+	if ((v & 0x07E0u) == 0) v |= 0x0020u;
+	if ((v & 0x001Fu) == 0) v |= 0x0001u;
+	return (uint16)(v + (C1 & 0x0821u) - (C2 & 0x0821u));
+}
+
+static inline uint16 COLOR_SUB1_2 (uint16 C1, uint16 C2)
+{
+	uint32 x = (((uint32)C1 | 0x10820u) - ((uint32)C2 & 0xF7DEu)) >> 1;
+	uint32 hi = x & 0x8410u;
+	uint32 mask = ((hi << 1) - (hi >> 4)) | ((hi & 0x0400u) >> 5);
+	return (uint16)((x & mask) & ~hi);
+}
+#else
 #if defined(OLD_COLOUR_BLENDING)
 #define COLOR_ADD(C1, C2) \
 GFX.X2 [((((C1) & RGB_REMOVE_LOW_BITS_MASK) + \
@@ -311,6 +348,7 @@ inline uint16 COLOR_SUB(uint16 C1, uint16 C2)
 #define COLOR_SUB1_2(C1, C2) \
 GFX.ZERO [(((C1) | RGB_HI_BITS_MASKx2) - \
 	   ((C2) & RGB_REMOVE_LOW_BITS_MASK)) >> 1]
+#endif
 
 typedef void (*NormalTileRenderer) (uint32 Tile, uint32 Offset, 
 				    uint32 StartLine, uint32 LineCount);

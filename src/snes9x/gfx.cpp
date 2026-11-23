@@ -98,21 +98,50 @@
 #include "cheats.h"
 #include "screenshot.h"
 
-static inline void gfx_fill_bytes(void *dst, uint8 byteval, uint32 nbytes)
-{
-	memset(dst, byteval, nbytes);
-}
-
 static inline void gfx_fill_u32(void *dst, uint32 val32, uint32 nbytes)
 {
+	uint8 *b = (uint8 *)dst;
+	uint8 *end = b + nbytes;
+#if defined(__mips__)
+	if (__builtin_expect(nbytes >= 64 && (((unsigned long)b & 3u) == 0) && ((nbytes & 3u) == 0), 1))
+	{
+		uint32 *p = (uint32 *)b;
+		uint32 *q = (uint32 *)end;
+		while (((unsigned long)p & 31u) != 0)
+			*p++ = val32;
+		uint32 *q32 = (uint32 *)((unsigned long)q & ~31ul);
+		while (p < q32)
+		{
+			__asm__ __volatile__("pref 30, 0(%0)" :: "r"(p) : "memory");
+			p[0] = val32; p[1] = val32; p[2] = val32; p[3] = val32;
+			p[4] = val32; p[5] = val32; p[6] = val32; p[7] = val32;
+			p += 8;
+		}
+		while (p < q)
+			*p++ = val32;
+		return;
+	}
+#endif
 	if (val32 == 0) {
 		memset(dst, 0, nbytes);
 		return;
 	}
-	uint32 *p = (uint32 *)dst;
-	uint32 *q = (uint32 *)((uint8 *)dst + nbytes);
+	uint32 *p = (uint32 *)b;
+	uint32 *q = (uint32 *)end;
 	while (p < q)
 		*p++ = val32;
+}
+
+static inline void gfx_fill_bytes(void *dst, uint8 byteval, uint32 nbytes)
+{
+#if defined(__mips__)
+	if (__builtin_expect(nbytes >= 64 && (((unsigned long)dst & 3u) == 0) && ((nbytes & 3u) == 0), 1))
+	{
+		gfx_fill_u32(dst, (uint32)byteval * 0x01010101u, nbytes);
+		return;
+	}
+#endif
+	memset(dst, byteval, nbytes);
 }
 
 #define M7 19
@@ -4007,6 +4036,14 @@ void S9xUpdateScreen ()
 								d += Left;
 								while (d < e)
 								{
+									if (((unsigned long)d & 3) == 0) {
+										while (d + 4 <= e) {
+											uint32 w = *(const uint32 *)d;
+											if (((w - 0x01010101u) & ~w & 0x80808080u) != 0) break;
+											d += 4; p += 4; s += 4;
+										}
+										if (d >= e) break;
+									}
 									if (*d == 0)
 									{
 										if (*s)
@@ -4036,6 +4073,14 @@ void S9xUpdateScreen ()
 								d += Left;
 								while (d < e)
 								{
+									if (((unsigned long)d & 3) == 0) {
+										while (d + 4 <= e) {
+											uint32 w = *(const uint32 *)d;
+											if (((w - 0x01010101u) & ~w & 0x80808080u) != 0) break;
+											d += 4; p += 4; s += 4;
+										}
+										if (d >= e) break;
+									}
 									if (*d == 0)
 									{
 										if (*s)
@@ -4064,6 +4109,14 @@ void S9xUpdateScreen ()
 							d += Left;
 							while (d < e)
 							{
+								if (((unsigned long)d & 3) == 0) {
+									while (d + 4 <= e) {
+										uint32 w = *(const uint32 *)d;
+										if (((w - 0x01010101u) & ~w & 0x80808080u) != 0) break;
+										d += 4; p += 4; s += 4;
+									}
+									if (d >= e) break;
+								}
 								if (*d == 0)
 								{
 									if (*s)
@@ -4091,6 +4144,14 @@ void S9xUpdateScreen ()
 							d += Left;
 							while (d < e)
 							{
+								if (((unsigned long)d & 3) == 0) {
+									while (d + 4 <= e) {
+										uint32 w = *(const uint32 *)d;
+										if (((w - 0x01010101u) & ~w & 0x80808080u) != 0) break;
+										d += 4; p += 4; s += 4;
+									}
+									if (d >= e) break;
+								}
 								if (*d == 0)
 								{
 									if (*s)
@@ -4123,6 +4184,14 @@ void S9xUpdateScreen ()
 								d += Left;
 								while (d < e)
 								{
+									if (((unsigned long)d & 3) == 0) {
+										while (d + 4 <= e) {
+											uint32 w = *(const uint32 *)d;
+											if (((w - 0x01010101u) & ~w & 0x80808080u) != 0) break;
+											d += 4; p += 4; s += 4;
+										}
+										if (d >= e) break;
+									}
 									if (*d == 0)
 									{
 										if (*s)

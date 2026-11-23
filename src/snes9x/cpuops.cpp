@@ -3363,43 +3363,49 @@ static void Op0CM0 (void)
 
 #ifdef CPU_SHUTDOWN
 #ifndef SA1_OPCODES
-inline void CPUShutdown()
+static void __attribute__((noinline)) CPUShutdownSlow()
 {
-    if (Settings.Shutdown && CPU.PC == CPU.WaitAddress)
-    {
-	// Don't skip cycles with a pending NMI or IRQ - could cause delayed
-	// interrupt. Interrupts are delayed for a few cycles already, but
-	// the delay could allow the shutdown code to cycle skip again.
-	// Was causing screen flashing on Top Gear 3000.
+    // Don't skip cycles with a pending NMI or IRQ - could cause delayed
+    // interrupt. Interrupts are delayed for a few cycles already, but
+    // the delay could allow the shutdown code to cycle skip again.
+    // Was causing screen flashing on Top Gear 3000.
 
-	if (CPU.WaitCounter == 0 && 
-	    !(CPU.Flags & (IRQ_PENDING_FLAG | NMI_FLAG)))
+    if (CPU.WaitCounter == 0 && 
+	!(CPU.Flags & (IRQ_PENDING_FLAG | NMI_FLAG)) &&
+	(!Settings.SA1 || !SA1.Executing))
+    {
+	CPU.WaitAddress = NULL;
+	if (Settings.SA1)
+	    S9xSA1ExecuteDuringSleep ();
+	CPU.Cycles = CPU.NextEvent;
+	if (IAPU.APUExecuting)
 	{
-	    CPU.WaitAddress = NULL;
-	    if (Settings.SA1)
-		S9xSA1ExecuteDuringSleep ();
-	    CPU.Cycles = CPU.NextEvent;
-	    if (IAPU.APUExecuting)
+	    ICPU.CPUExecuting = FALSE;
+	    do
 	    {
-		ICPU.CPUExecuting = FALSE;
-		do
-		{
-		    APU_EXECUTE1();
-		} while (APU.Cycles < CPU.NextEvent);
-		ICPU.CPUExecuting = TRUE;
-	    }
+		APU_EXECUTE1();
+	    } while (APU.Cycles < CPU.NextEvent);
+	    ICPU.CPUExecuting = TRUE;
 	}
-	else
-	if (CPU.WaitCounter >= 2)
-	    CPU.WaitCounter = 1;
-	else
-	    CPU.WaitCounter--;
     }
+    else
+    if (CPU.WaitCounter >= 2)
+	CPU.WaitCounter = 1;
+    else
+	CPU.WaitCounter--;
+}
+
+static inline void CPUShutdown()
+{
+    if (__builtin_expect(CPU.PC == CPU.WaitAddress && Settings.Shutdown, 0))
+	CPUShutdownSlow();
 }
 #else
-inline void CPUShutdown()
+static inline void CPUShutdown()
 {
-    if (Settings.Shutdown && CPU.PC == CPU.WaitAddress)
+    if (__builtin_expect((CPU.PC == CPU.WaitAddress ||
+                          CPU.PC == CPU.WaitAddress2 ||
+                          CPU.PC == CPU.WaitAddress3) && Settings.Shutdown, 0))
     {
 	if (CPU.WaitCounter >= 1)
 	{
@@ -3415,138 +3421,70 @@ inline void CPUShutdown()
 #define CPUShutdown()
 #endif
 
+#ifndef SA1_OPCODES
+#define FAST_BRANCH(COND, CHECKMACRO) \
+    int8 Int8 = (int8) *CPU.PC++; \
+    if (__builtin_expect(CPU.BranchSkip, 0)) { \
+	OpAddress = ((int)(CPU.PC - CPU.PCBase) + Int8) & 0xffff; \
+	CHECKMACRO (); \
+    } \
+    if (COND) { \
+	CPU.PC = CPU.PCBase + (((int)(CPU.PC - CPU.PCBase) + Int8) & 0xffff); \
+	CPU.Cycles += CPU.MemSpeed + ONE_CYCLE; \
+	CPUShutdown (); \
+    } else { \
+	CPU.Cycles += CPU.MemSpeed; \
+    }
+#else
+#define FAST_BRANCH(COND, CHECKMACRO) \
+    int8 Int8 = (int8) *CPU.PC++; \
+    if (COND) { \
+	CPU.PC = CPU.PCBase + (((int)(CPU.PC - CPU.PCBase) + Int8) & 0xffff); \
+	CPUShutdown (); \
+    }
+#endif
+
 /* BCC */
 static void Op90 (void)
 {
-    Relative (JUMP, OpAddressPassthrough);
-    BranchCheck0 ();
-    if (!CheckCarry ())
-    {
-	CPU.PC = CPU.PCBase + OpAddress;
-#ifndef SA1_OPCODES
-	CPU.Cycles += CPU.MemSpeed + ONE_CYCLE;
-#endif
-	CPUShutdown();
-    }
-#ifndef SA1_OPCODES
-    else
-    {
-        CPU.Cycles += CPU.MemSpeed;
-    }
-#endif
+    FAST_BRANCH (!CheckCarry (), BranchCheck0)
 }
 
 /* BCS */
 static void OpB0 (void)
 {
-    Relative (JUMP, OpAddressPassthrough);
-    BranchCheck0 ();
-    if (CheckCarry ())
-    {
-	CPU.PC = CPU.PCBase + OpAddress;
-#ifndef SA1_OPCODES
-	CPU.Cycles += CPU.MemSpeed + ONE_CYCLE;
-#endif
-	CPUShutdown ();
-    }
-#ifndef SA1_OPCODES
-    else
-    {
-        CPU.Cycles += CPU.MemSpeed;
-    }
-#endif
+    FAST_BRANCH (CheckCarry (), BranchCheck0)
 }
 
 /* BEQ */
 static void OpF0 (void)
 {
-    Relative (JUMP, OpAddressPassthrough);
-    BranchCheck2 ();
-    if (CheckZero ())
-    {
-	CPU.PC = CPU.PCBase + OpAddress;
-#ifndef SA1_OPCODES
-	CPU.Cycles += CPU.MemSpeed + ONE_CYCLE;
-#endif
-	CPUShutdown ();
-    }
-#ifndef SA1_OPCODES
-    else
-    {
-        CPU.Cycles += CPU.MemSpeed;
-    }
-#endif
+    FAST_BRANCH (CheckZero (), BranchCheck2)
 }
 
 /* BMI */
 static void Op30 (void)
 {
-    Relative (JUMP, OpAddressPassthrough);
-    BranchCheck1 ();
-    if (CheckNegative ())
-    {
-	CPU.PC = CPU.PCBase + OpAddress;
-#ifndef SA1_OPCODES
-	CPU.Cycles += CPU.MemSpeed + ONE_CYCLE;
-#endif
-	CPUShutdown ();
-    }
-#ifndef SA1_OPCODES
-    else
-    {
-        CPU.Cycles += CPU.MemSpeed;
-    }
-#endif
+    FAST_BRANCH (CheckNegative (), BranchCheck1)
 }
 
 /* BNE */
 static void OpD0 (void)
 {
-    Relative (JUMP, OpAddressPassthrough);
-    BranchCheck1 ();
-    if (!CheckZero ())
-    {
-	CPU.PC = CPU.PCBase + OpAddress;
-
-#ifndef SA1_OPCODES
-	CPU.Cycles += CPU.MemSpeed + ONE_CYCLE;
-#endif
-	CPUShutdown ();
-    }
-#ifndef SA1_OPCODES
-    else
-    {
-        CPU.Cycles += CPU.MemSpeed;
-    }
-#endif
+    FAST_BRANCH (!CheckZero (), BranchCheck1)
 }
 
 /* BPL */
 static void Op10 (void)
 {
-    Relative (JUMP, OpAddressPassthrough);
-    BranchCheck1 ();
-    if (!CheckNegative ())
-    {
-	CPU.PC = CPU.PCBase + OpAddress;
-#ifndef SA1_OPCODES
-	CPU.Cycles += CPU.MemSpeed + ONE_CYCLE;
-#endif
-	CPUShutdown ();
-    }
-#ifndef SA1_OPCODES
-    else
-    {
-        CPU.Cycles += CPU.MemSpeed;
-    }
-#endif
+    FAST_BRANCH (!CheckNegative (), BranchCheck1)
 }
 
 /* BRA */
 static void Op80 (void)
 {
-    Relative (JUMP, OpAddressPassthrough);
-    CPU.PC = CPU.PCBase + OpAddress;
+    int8 Int8 = (int8) *CPU.PC++;
+    CPU.PC = CPU.PCBase + (((int)(CPU.PC - CPU.PCBase) + Int8) & 0xffff);
 #ifndef SA1_OPCODES
     CPU.Cycles += CPU.MemSpeed + ONE_CYCLE;
 #endif
@@ -3556,43 +3494,13 @@ static void Op80 (void)
 /* BVC */
 static void Op50 (void)
 {
-    Relative (JUMP, OpAddressPassthrough);
-    BranchCheck0 ();
-    if (!CheckOverflow ())
-    {
-	CPU.PC = CPU.PCBase + OpAddress;
-#ifndef SA1_OPCODES
-	CPU.Cycles += CPU.MemSpeed + ONE_CYCLE;
-#endif
-	CPUShutdown ();
-    }
-#ifndef SA1_OPCODES
-    else
-    {
-        CPU.Cycles += CPU.MemSpeed;
-    }
-#endif
+    FAST_BRANCH (!CheckOverflow (), BranchCheck0)
 }
 
 /* BVS */
 static void Op70 (void)
 {
-    Relative (JUMP, OpAddressPassthrough);
-    BranchCheck0 ();
-    if (CheckOverflow ())
-    {
-	CPU.PC = CPU.PCBase + OpAddress;
-#ifndef SA1_OPCODES
-	CPU.Cycles += CPU.MemSpeed + ONE_CYCLE;
-#endif
-	CPUShutdown ();
-    }
-#ifndef SA1_OPCODES
-    else
-    {
-        CPU.Cycles += CPU.MemSpeed;
-    }
-#endif
+    FAST_BRANCH (CheckOverflow (), BranchCheck0)
 }
 /**********************************************************************************************/
 

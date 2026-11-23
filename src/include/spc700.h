@@ -191,10 +191,11 @@ EXTERN_C int32 ESPC (int32);
 #endif
 
 #define APU_EXECUTE() \
-if (IAPU.APUExecuting) \
+if (__builtin_expect(IAPU.APUExecuting && APU.Cycles <= CPU.Cycles, 0)) \
 {\
-    while (APU.Cycles <= CPU.Cycles) \
+    do { \
 	APU_EXECUTE1(); \
+    } while (APU.Cycles <= CPU.Cycles); \
 }
 #endif
 

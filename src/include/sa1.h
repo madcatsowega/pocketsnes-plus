@@ -142,6 +142,8 @@ struct SSA1 {
     bool8   in_char_dma;
     uint8   variable_bit_pos;
     struct  SSA1Registers Registers;
+    uint8   *WaitAddress2;
+    uint8   *WaitAddress3;
 };
 
 #define SA1CheckZero() (SA1._Zero == 0)
@@ -162,7 +164,9 @@ struct SSA1 {
 START_EXTERN_C
 extern uint8 OpenBus;
 uint8 S9xSA1GetByteSlow (uint32);
+uint16 S9xSA1GetWordSlow (uint32);
 void S9xSA1SetByteSlow (uint8, uint32);
+void S9xSA1SetWordSlow (uint16, uint32);
 void S9xSA1SetPCBase (uint32);
 uint8 S9xGetSA1 (uint32);
 void S9xSetSA1 (uint8, uint32);
@@ -189,12 +193,10 @@ static inline uint16 S9xSA1GetWord (uint32 address)
         if (__builtin_expect(GetAddress >= (uint8 *) CMemory::MAP_LAST, 1))
         {
             uint8 *p = GetAddress + (address & 0xffff);
-            OpenBus = p[1];
-            return (uint16)p[0] | ((uint16)OpenBus << 8);
+            return (uint16)p[0] | ((uint16)p[1] << 8);
         }
     }
-    OpenBus = S9xSA1GetByte (address);
-    return (OpenBus | (S9xSA1GetByte (address + 1) << 8));
+    return S9xSA1GetWordSlow (address);
 }
 
 static inline void S9xSA1SetByte (uint8 byte, uint32 address)
@@ -221,14 +223,15 @@ static inline void S9xSA1SetWord (uint16 Word, uint32 address)
             return;
         }
     }
-    S9xSA1SetByte ((uint8) Word, address);
-    S9xSA1SetByte ((uint8) (Word >> 8), address + 1);
+    S9xSA1SetWordSlow (Word, address);
 }
 
 void S9xSA1MainLoop ();
 void S9xSA1Init ();
 void S9xFixSA1AfterSnapshotLoad ();
 void S9xSA1ExecuteDuringSleep ();
+void S9xSA1SetBWRAMMemMap (uint8 val);
+void S9xSNESSetBWRAMMemMap (uint8 val);
 END_EXTERN_C
 void S9xSA1Opcode_IRQ ();
 
