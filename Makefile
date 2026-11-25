@@ -19,7 +19,8 @@ SDL_LIBS := $(shell $(SYSROOT)/usr/bin/sdl-config --libs)
 INCLUDE = -I src \
 		-I sal/linux/include -I sal/include \
 		-I src/include \
-		-I menu -I src/linux -I src/snes9x
+		-I menu -I src/linux -I src/snes9x \
+		-I /home/sean/retrofw-aux/include -I /home/sean/retrofw-aux/lib
 
 CFLAGS =  $(INCLUDE) -DRC_OPTIMIZED -DGCW_ZERO -D__LINUX__ -D__DINGUX__ -DFOREVER_16_BIT -DFOREVER_16_BIT_SOUND -DFOREVER_FORWARD_STEREO -DNO_VOLATILE_SOUND $(SDL_CFLAGS)
 CFLAGS += -O3 -fdata-sections -ffunction-sections -fomit-frame-pointer -fno-builtin -fwrapv -fno-strict-aliasing
@@ -31,12 +32,12 @@ ifeq ($(PGO),generate)
 CFLAGS += -fprofile-generate -fprofile-dir=/tmp/profile
 endif
 ifeq ($(PGO),use)
-CFLAGS += -fprofile-use -fprofile-dir=./profile -fprofile-correction -Wno-missing-profile
+CFLAGS += -fprofile-use -fprofile-dir=./profile -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch
 endif
 
 CXXFLAGS = -std=gnu++11 $(CFLAGS) -fpermissive -fno-exceptions -fno-rtti -fno-math-errno -fno-threadsafe-statics
 
-LDFLAGS = $(CXXFLAGS) -lpthread -lz -lpng $(SDL_LIBS) -lSDL_image -Wl,--as-needed -Wl,--gc-sections -s
+LDFLAGS = $(CXXFLAGS) /home/sean/retrofw-aux/lib/libjzaux.a -lpthread -lz -lpng $(SDL_LIBS) -lSDL_image -Wl,--as-needed -Wl,--gc-sections -s
 
 # Find all source files
 SOURCE = src/snes9x menu sal/linux sal
@@ -90,7 +91,7 @@ opk: all
 	pocketsnes/pocketsnes.png \
 	pocketsnes/backdrop.png \
 	pocketsnes/pocketsnes.opk \
-	-all-root -noappend -no-exports -no-xattrs
+	-comp gzip -all-root -noappend -no-exports -no-xattrs
 
 clean :
 	rm -f $(OBJS) pocketsnes/pocketsnes.ipk

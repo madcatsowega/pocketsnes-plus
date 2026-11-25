@@ -105,7 +105,13 @@ void snes_mix_noecho_mxu(const int *mbuf, short *out, int sample_count, int mvol
 void snes_mix_echo_nofir_mxu(const int *mbuf, const int *ebuf, int *echo, short *out, int count, const int *params);
 void snes_mix_echo_fir_stereo_mxu(const int *mbuf, const int *ebuf, int *echo, short *out, int count, int *win, const int *taps8, const int *params5);
 void snes_mix_echo_fir_mono_mxu(const int *mbuf, const int *ebuf, int *echo, short *out, int count, int *win, const int *taps8, const int *params5);
+void snes_jzaux_init(void);
+void snes_jzaux_shutdown(void);
+void snes_jzaux_flush(void);
 }
+static void snes_jzaux_mark_host_dirty(void);
+static void snes_jzaux_mark_ch_reset(int ch);
+static void snes_jzaux_mark_echo_dirty(void);
 int snes_use_mxu = 0;
 
 static void snes_detect_and_enable_mxu(void)
@@ -350,6 +356,9 @@ void S9xSetEchoVolume (short volume_left, short volume_right)
 
 void S9xSetEchoEnable (uint8 byte)
 {
+#ifdef MIPS_XBURST
+    snes_jzaux_flush();
+#endif
     SoundData.echo_channel_enable = byte;
     if (!SoundData.echo_write_enabled || Settings.DisableSoundEcho)
 		byte = 0;
@@ -357,6 +366,9 @@ void S9xSetEchoEnable (uint8 byte)
     {
 		memset (Echo, 0, sizeof (Echo));
 		memset (Loop, 0, sizeof (Loop));
+#ifdef MIPS_XBURST
+		snes_jzaux_mark_echo_dirty();
+#endif
     }
 	
     SoundData.echo_enable = byte;
@@ -377,6 +389,9 @@ void S9xSetEchoFeedback (int feedback)
 
 void S9xSetEchoDelay (int delay)
 {
+#ifdef MIPS_XBURST
+    snes_jzaux_flush();
+#endif
     SoundData.echo_buffer_size = (512 * delay * so.playback_rate) / 32000;
 #ifndef FOREVER_STEREO
     if (so.stereo)
@@ -444,6 +459,9 @@ void S9xFixSoundAfterSnapshotLoad ()
     SoundData.echo_volume [1 ^ Settings.ReverseStereo] = SoundData.echo_volume_right;
 #endif
     IAPU.Scanline = 0;
+#ifdef MIPS_XBURST
+    snes_jzaux_mark_host_dirty();
+#endif
 }
 
 void S9xSetFilterCoefficient (int tap, int value)
@@ -2230,8 +2248,19 @@ void S9xMixSamples (uint8 *buffer, int sample_count)
 END_OF_FUNCTION(S9xMixSamples);
 #endif
 
+#ifdef MIPS_XBURST
+#include "soundux_jzaux.h"
+static void snes_jzaux_mark_echo_dirty(void)
+{
+	g_snes_echo_sync_host = 1;
+}
+#endif
+
 void S9xResetSound (bool8 full)
 {
+#ifdef MIPS_XBURST
+    snes_jzaux_mark_host_dirty();
+#endif
     for (int i = 0; i < 8; i++)
     {
 		SoundData.channels[i].state = SOUND_SILENT;
@@ -2321,6 +2350,7 @@ bool8 S9xInitSound (int mode, bool8 stereo, int buffer_size)
 {
 #ifdef MIPS_XBURST
     snes_detect_and_enable_mxu();
+    snes_jzaux_init();
 #endif
     so.sound_fd = -1;
     so.sound_switch = 255;
@@ -2414,6 +2444,9 @@ void S9xSetSoundControl (int sound_switch)
 void S9xPlaySample (int channel)
 {
     Channel *ch = &SoundData.channels[channel];
+#ifdef MIPS_XBURST
+    snes_jzaux_mark_ch_reset(channel);
+#endif
     
     ch->state = SOUND_SILENT;
     ch->mode = MODE_NONE;

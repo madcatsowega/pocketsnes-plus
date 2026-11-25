@@ -93,6 +93,7 @@
 #include "display.h"
 #include "gfx.h"
 #include "tile.h"
+#include "tile_mxu.h"
 
 static uint8 ConvertTile (uint8 *pCache, uint32 TileAddr)
 {
@@ -849,14 +850,17 @@ void DrawTile16 (uint32 Tile, uint32 Offset, uint32 StartLine,
 	uint32 pix4;
 
 	bp = (Tile & V_FLIP) ? (pCache + 56 - StartLine) : (pCache + StartLine);
-	__builtin_prefetch(pCache + 32, 0, 0);
+	if (LineCount > 1)
+		__builtin_prefetch(pCache + 32, 0, 0);
 
 	if (__builtin_expect(!(Tile & H_FLIP), 1))
 	{
 		for (l = LineCount; l != 0; l--, bp += row_step, Screen += ppl_step, Depth += ppl_step)
 		{
-			__builtin_prefetch(Depth + ppl_step, 1, 0);
-			__builtin_prefetch(Screen + ppl_step, 1, 0);
+			if (l > 1) {
+				__builtin_prefetch(Depth + ppl_step, 1, 0);
+				__builtin_prefetch(Screen + ppl_step, 1, 0);
+			}
 			if ((pix4 = *(uint32 *) bp))
 				WRITE_4PIXELS16_FAST (Screen, Depth, pix4, ScreenColors, z1, z2, z1_4, z1_m1_4, z2_4);
 			if ((pix4 = *(uint32 *) (bp + 4)))
@@ -867,8 +871,10 @@ void DrawTile16 (uint32 Tile, uint32 Offset, uint32 StartLine,
 	{
 		for (l = LineCount; l != 0; l--, bp += row_step, Screen += ppl_step, Depth += ppl_step)
 		{
-			__builtin_prefetch(Depth + ppl_step, 1, 0);
-			__builtin_prefetch(Screen + ppl_step, 1, 0);
+			if (l > 1) {
+				__builtin_prefetch(Depth + ppl_step, 1, 0);
+				__builtin_prefetch(Screen + ppl_step, 1, 0);
+			}
 			if ((pix4 = *(uint32 *) (bp + 4)))
 				WRITE_4PIXELS16_FLIPPED_FAST (Screen, Depth, pix4, ScreenColors, z1, z2, z1_4, z1_m1_4, z2_4);
 			if ((pix4 = *(uint32 *) bp))
@@ -1009,423 +1015,337 @@ void DrawLargePixel16HalfWidth (uint32 Tile, uint32 Offset,
     RENDER_TILE_LARGE_HALFWIDTH (ScreenColors [pixel], PLOT_PIXEL)
 }
 
-static inline void WRITE_4PIXELS16_ADD (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
-{
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1;
-	const uint8 z2 = GFX.Z2;
-	const int32 delta = GFX.Delta;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
+enum TileColorMathMode {
+	CM_ADD = 0,
+	CM_ADD1_2,
+	CM_SUB,
+	CM_SUB1_2,
+	CM_FIXED_ADD1_2,
+	CM_FIXED_SUB1_2
+};
 
-	for (int N = 0; N < 4; N++)
-	{
-		uint8 Pixel = Pixels[N];
-		if (Pixel && z1 > Depth[N])
-		{
-			uint16 col = ScreenColors[Pixel];
-			uint8 sd = SubDepth[N];
-			if (sd)
-				col = COLOR_ADD (col, (sd == 1) ? fixed_col : Screen[delta + N]);
-			Screen[N] = col;
-			Depth[N] = z2;
+template <int Mode>
+static inline uint16 apply_cm_scalar(uint16 col, uint8 sd, uint16 sub_col, uint16 fixed_col)
+{
+	if (Mode == CM_FIXED_ADD1_2) {
+		return (sd == 1) ? (uint16)COLOR_ADD1_2(col, fixed_col) : col;
+	} else if (Mode == CM_FIXED_SUB1_2) {
+		return (sd == 1) ? COLOR_SUB1_2(col, fixed_col) : col;
+	} else if (Mode == CM_ADD) {
+		return sd ? COLOR_ADD(col, (sd == 1) ? fixed_col : sub_col) : col;
+	} else if (Mode == CM_ADD1_2) {
+		if (sd == 1) return COLOR_ADD(col, fixed_col);
+		if (sd)      return (uint16)COLOR_ADD1_2(col, sub_col);
+		return col;
+	} else if (Mode == CM_SUB) {
+		return sd ? COLOR_SUB(col, (sd == 1) ? fixed_col : sub_col) : col;
+	} else { /* CM_SUB1_2 */
+		if (sd == 1) return COLOR_SUB(col, fixed_col);
+		if (sd)      return COLOR_SUB1_2(col, sub_col);
+		return col;
+	}
+}
+
+template <int Mode, bool Flipped>
+static void __attribute__((noinline)) WRITE_4PIXELS16_CM_MIXED(
+	uint16 * __restrict__ Screen, const uint16 * __restrict__ SubScreen,
+	uint8 * __restrict__ Depth, const uint8 * __restrict__ SubDepth,
+	uint32 pix4, uint32 z4, const uint16 * __restrict__ ScreenColors,
+	uint8 z1, uint8 z2, uint16 fixed_col)
+{
+	uint32 p;
+	if (!Flipped) {
+		if (z1 > (z4 & 0xffu) && (p = (pix4 & 0xffu))) {
+			Screen[0] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[0], SubScreen[0], fixed_col);
+			Depth[0] = z2;
+		}
+		if (z1 > ((z4 >> 8) & 0xffu) && (p = ((pix4 >> 8) & 0xffu))) {
+			Screen[1] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[1], SubScreen[1], fixed_col);
+			Depth[1] = z2;
+		}
+		if (z1 > ((z4 >> 16) & 0xffu) && (p = ((pix4 >> 16) & 0xffu))) {
+			Screen[2] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[2], SubScreen[2], fixed_col);
+			Depth[2] = z2;
+		}
+		if (z1 > (z4 >> 24) && (p = (pix4 >> 24))) {
+			Screen[3] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[3], SubScreen[3], fixed_col);
+			Depth[3] = z2;
+		}
+	} else {
+		if (z1 > (z4 & 0xffu) && (p = (pix4 >> 24))) {
+			Screen[0] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[0], SubScreen[0], fixed_col);
+			Depth[0] = z2;
+		}
+		if (z1 > ((z4 >> 8) & 0xffu) && (p = ((pix4 >> 16) & 0xffu))) {
+			Screen[1] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[1], SubScreen[1], fixed_col);
+			Depth[1] = z2;
+		}
+		if (z1 > ((z4 >> 16) & 0xffu) && (p = ((pix4 >> 8) & 0xffu))) {
+			Screen[2] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[2], SubScreen[2], fixed_col);
+			Depth[2] = z2;
+		}
+		if (z1 > (z4 >> 24) && (p = (pix4 & 0xffu))) {
+			Screen[3] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[3], SubScreen[3], fixed_col);
+			Depth[3] = z2;
 		}
 	}
 }
 
-static inline void WRITE_4PIXELS16_FLIPPED_ADD (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
+template <int Mode, bool Flipped>
+static inline void WRITE_4PIXELS16_CM_FAST(
+	uint16 * __restrict__ Screen, const uint16 * __restrict__ SubScreen,
+	uint8 * __restrict__ Depth, const uint8 * __restrict__ SubDepth,
+	uint32 pix4, const uint16 * __restrict__ ScreenColors,
+	uint8 z1, uint8 z2, uint32 z1_4, uint32 z1_m1_4, uint32 z2_4,
+	uint16 fixed_col, uint32 fixed2)
 {
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1;
-	const uint8 z2 = GFX.Z2;
-	const int32 delta = GFX.Delta;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
+	uint32 z4 = tile_load_u32_ua(Depth);
 
-	for (int N = 0; N < 4; N++)
+	/* Fast reject: all 4 pixels already occluded */
+	if (__builtin_expect(((z4 - z1_4) & 0x80808080u) == 0, 0))
+		return;
+
+	/* Fast path: all 4 pixels pass depth test */
+	if (__builtin_expect(((z1_m1_4 - z4) & 0x80808080u) == 0, 1))
 	{
-		uint8 Pixel = Pixels[3 - N];
-		if (Pixel && z1 > Depth[N])
+		/* Sub-path: all 4 pixels opaque -> 4px SIMD / SWAR color math + packed 32b stores */
+		if (__builtin_expect(((pix4 - 0x01010101u) & ~pix4 & 0x80808080u) == 0, 1))
 		{
-			uint16 col = ScreenColors[Pixel];
-			uint8 sd = SubDepth[N];
-			if (sd)
-				col = COLOR_ADD (col, (sd == 1) ? fixed_col : Screen[delta + N]);
-			Screen[N] = col;
-			Depth[N] = z2;
+			uint32 c0, c1, c2, c3;
+			if (!Flipped) {
+				c0 = ScreenColors[pix4 & 0xffu];
+				c1 = ScreenColors[(pix4 >> 8) & 0xffu];
+				c2 = ScreenColors[(pix4 >> 16) & 0xffu];
+				c3 = ScreenColors[pix4 >> 24];
+			} else {
+				c0 = ScreenColors[pix4 >> 24];
+				c1 = ScreenColors[(pix4 >> 16) & 0xffu];
+				c2 = ScreenColors[(pix4 >> 8) & 0xffu];
+				c3 = ScreenColors[pix4 & 0xffu];
+			}
+			uint32 p01 = c0 | (c1 << 16);
+			uint32 p23 = c2 | (c3 << 16);
+			tile_store_u32_ua(Depth, z2_4);
+
+			uint32 sd4 = tile_load_u32_ua(SubDepth);
+			if (Mode == CM_FIXED_ADD1_2 || Mode == CM_FIXED_SUB1_2) {
+				if (sd4 == 0x01010101u) {
+					if (Mode == CM_FIXED_ADD1_2)
+						snes_add1_2_4px_fixed(Screen, fixed2, p01, p23);
+					else
+						snes_sub1_2_4px_fixed(Screen, fixed2, p01, p23);
+					return;
+				}
+				uint32 x1 = sd4 ^ 0x01010101u;
+				if (((x1 - 0x01010101u) & ~x1 & 0x80808080u) == 0) {
+					tile_store_4px_fast(Screen, p01, p23);
+					return;
+				}
+			} else {
+				if (sd4 == 0u) {
+					tile_store_4px_fast(Screen, p01, p23);
+					return;
+				}
+				if (sd4 == 0x01010101u) {
+					if (Mode == CM_ADD || Mode == CM_ADD1_2)
+						snes_add_4px_fixed(Screen, fixed2, p01, p23);
+					else
+						snes_sub_4px_fixed(Screen, fixed2, p01, p23);
+					return;
+				}
+				if (((sd4 - 0x02020202u) & 0x80808080u) == 0) {
+					if (Mode == CM_ADD)
+						snes_add_4px_mem(Screen, SubScreen, p01, p23);
+					else if (Mode == CM_ADD1_2)
+						snes_add1_2_4px_mem(Screen, SubScreen, p01, p23);
+					else if (Mode == CM_SUB)
+						snes_sub_4px_mem(Screen, SubScreen, p01, p23);
+					else
+						snes_sub1_2_4px_mem(Screen, SubScreen, p01, p23);
+					return;
+				}
+			}
+			/* Mixed SubDepth across the 4 opaque visible pixels */
+			Screen[0] = apply_cm_scalar<Mode>((uint16)c0, (uint8)(sd4 & 0xffu),         SubScreen[0], fixed_col);
+			Screen[1] = apply_cm_scalar<Mode>((uint16)c1, (uint8)((sd4 >> 8) & 0xffu),  SubScreen[1], fixed_col);
+			Screen[2] = apply_cm_scalar<Mode>((uint16)c2, (uint8)((sd4 >> 16) & 0xffu), SubScreen[2], fixed_col);
+			Screen[3] = apply_cm_scalar<Mode>((uint16)c3, (uint8)(sd4 >> 24),           SubScreen[3], fixed_col);
+			return;
 		}
+		/* Partial transparency, all 4 visible -> skip per-pixel Z checks */
+		uint32 p;
+		if (!Flipped) {
+			if ((p = (pix4 & 0xffu)))          { Screen[0] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[0], SubScreen[0], fixed_col); Depth[0] = z2; }
+			if ((p = ((pix4 >> 8) & 0xffu)))   { Screen[1] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[1], SubScreen[1], fixed_col); Depth[1] = z2; }
+			if ((p = ((pix4 >> 16) & 0xffu)))  { Screen[2] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[2], SubScreen[2], fixed_col); Depth[2] = z2; }
+			if ((p = (pix4 >> 24)))            { Screen[3] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[3], SubScreen[3], fixed_col); Depth[3] = z2; }
+		} else {
+			if ((p = (pix4 >> 24)))            { Screen[0] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[0], SubScreen[0], fixed_col); Depth[0] = z2; }
+			if ((p = ((pix4 >> 16) & 0xffu)))  { Screen[1] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[1], SubScreen[1], fixed_col); Depth[1] = z2; }
+			if ((p = ((pix4 >> 8) & 0xffu)))   { Screen[2] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[2], SubScreen[2], fixed_col); Depth[2] = z2; }
+			if ((p = (pix4 & 0xffu)))          { Screen[3] = apply_cm_scalar<Mode>(ScreenColors[p], SubDepth[3], SubScreen[3], fixed_col); Depth[3] = z2; }
+		}
+		return;
 	}
+
+	WRITE_4PIXELS16_CM_MIXED<Mode, Flipped>(Screen, SubScreen, Depth, SubDepth, pix4, z4, ScreenColors, z1, z2, fixed_col);
 }
 
-static inline void WRITE_4PIXELS16_ADD1_2 (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
-{
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1;
-	const uint8 z2 = GFX.Z2;
-	const int32 delta = GFX.Delta;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
-
-	for (int N = 0; N < 4; N++)
-	{
-		uint8 Pixel = Pixels[N];
-		if (Pixel && z1 > Depth[N])
-		{
-			uint16 col = ScreenColors[Pixel];
-			uint8 sd = SubDepth[N];
-			if (sd == 1)
-				col = COLOR_ADD (col, fixed_col);
-			else if (sd)
-				col = (uint16) COLOR_ADD1_2 (col, Screen[delta + N]);
-			Screen[N] = col;
-			Depth[N] = z2;
-		}
-	}
-}
-
-static inline void WRITE_4PIXELS16_FLIPPED_ADD1_2 (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
-{
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1;
-	const uint8 z2 = GFX.Z2;
-	const int32 delta = GFX.Delta;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
-
-	for (int N = 0; N < 4; N++)
-	{
-		uint8 Pixel = Pixels[3 - N];
-		if (Pixel && z1 > Depth[N])
-		{
-			uint16 col = ScreenColors[Pixel];
-			uint8 sd = SubDepth[N];
-			if (sd == 1)
-				col = COLOR_ADD (col, fixed_col);
-			else if (sd)
-				col = (uint16) COLOR_ADD1_2 (col, Screen[delta + N]);
-			Screen[N] = col;
-			Depth[N] = z2;
-		}
-	}
-}
-
-static inline void WRITE_4PIXELS16_SUB (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
-{
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1;
-	const uint8 z2 = GFX.Z2;
-	const int32 delta = GFX.Delta;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
-
-	for (int N = 0; N < 4; N++)
-	{
-		uint8 Pixel = Pixels[N];
-		if (Pixel && z1 > Depth[N])
-		{
-			uint16 col = ScreenColors[Pixel];
-			uint8 sd = SubDepth[N];
-			if (sd)
-				col = COLOR_SUB (col, (sd == 1) ? fixed_col : Screen[delta + N]);
-			Screen[N] = col;
-			Depth[N] = z2;
-		}
-	}
-}
-
-static inline void WRITE_4PIXELS16_FLIPPED_SUB (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
-{
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1;
-	const uint8 z2 = GFX.Z2;
-	const int32 delta = GFX.Delta;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
-
-	for (int N = 0; N < 4; N++)
-	{
-		uint8 Pixel = Pixels[3 - N];
-		if (Pixel && z1 > Depth[N])
-		{
-			uint16 col = ScreenColors[Pixel];
-			uint8 sd = SubDepth[N];
-			if (sd)
-				col = COLOR_SUB (col, (sd == 1) ? fixed_col : Screen[delta + N]);
-			Screen[N] = col;
-			Depth[N] = z2;
-		}
-	}
-}
-
-static inline void WRITE_4PIXELS16_SUB1_2 (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
-{
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1;
-	const uint8 z2 = GFX.Z2;
-	const int32 delta = GFX.Delta;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
-
-	for (int N = 0; N < 4; N++)
-	{
-		uint8 Pixel = Pixels[N];
-		if (Pixel && z1 > Depth[N])
-		{
-			uint16 col = ScreenColors[Pixel];
-			uint8 sd = SubDepth[N];
-			if (sd == 1)
-				col = COLOR_SUB (col, fixed_col);
-			else if (sd)
-				col = COLOR_SUB1_2 (col, Screen[delta + N]);
-			Screen[N] = col;
-			Depth[N] = z2;
-		}
-	}
-}
-
-static inline void WRITE_4PIXELS16_FLIPPED_SUB1_2 (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
-{
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1;
-	const uint8 z2 = GFX.Z2;
-	const int32 delta = GFX.Delta;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
-
-	for (int N = 0; N < 4; N++)
-	{
-		uint8 Pixel = Pixels[3 - N];
-		if (Pixel && z1 > Depth[N])
-		{
-			uint16 col = ScreenColors[Pixel];
-			uint8 sd = SubDepth[N];
-			if (sd == 1)
-				col = COLOR_SUB (col, fixed_col);
-			else if (sd)
-				col = COLOR_SUB1_2 (col, Screen[delta + N]);
-			Screen[N] = col;
-			Depth[N] = z2;
-		}
-	}
-}
-
-
-void DrawTile16Add (uint32 Tile, uint32 Offset, uint32 StartLine,
-		    uint32 LineCount)
+template <int Mode>
+static inline void DRAW_TILE16_CM_IMPL(uint32 Tile, uint32 Offset, uint32 StartLine, uint32 LineCount)
 {
 	TILE_PREAMBLE
 	register uint8 *bp;
+	const int tile_step = GFX.HalfRes ? 16 : 8;
+	const int row_step = (Tile & V_FLIP) ? -tile_step : tile_step;
+	const uint32 ppl_step = GFX.HalfRes ? (GFX.PPL << 1) : GFX.PPL;
+	const uint8 z1 = GFX.Z1;
+	const uint8 z2 = GFX.Z2;
+	const uint32 z1_4 = (uint32)z1 * 0x01010101u;
+	const uint32 z1_m1_4 = (uint32)(z1 - 1) * 0x01010101u;
+	const uint32 z2_4 = (uint32)z2 * 0x01010101u;
+	const uint16 fixed_col = (uint16)GFX.FixedColour;
+	const uint32 fixed2 = (uint32)fixed_col | ((uint32)fixed_col << 16);
+	uint16 *Screen = (uint16 *)GFX.S + Offset;
+	const uint16 *SubScreen = Screen + GFX.Delta;
+	uint8 *Depth = GFX.ZBuffer + Offset;
+	const uint8 *SubDepth = GFX.SubZBuffer + Offset;
+	uint32 pix4;
 
-	RENDER_TILE(WRITE_4PIXELS16_ADD, WRITE_4PIXELS16_FLIPPED_ADD, 4)
+	bp = (Tile & V_FLIP) ? (pCache + 56 - StartLine) : (pCache + StartLine);
+
+	if (__builtin_expect(!(Tile & H_FLIP), 1)) {
+		for (l = LineCount; l != 0; l--, bp += row_step, Screen += ppl_step, SubScreen += ppl_step, Depth += ppl_step, SubDepth += ppl_step) {
+			if ((pix4 = *(uint32 *)bp))
+				WRITE_4PIXELS16_CM_FAST<Mode, false>(Screen, SubScreen, Depth, SubDepth, pix4, ScreenColors, z1, z2, z1_4, z1_m1_4, z2_4, fixed_col, fixed2);
+			if ((pix4 = *(uint32 *)(bp + 4)))
+				WRITE_4PIXELS16_CM_FAST<Mode, false>(Screen + 4, SubScreen + 4, Depth + 4, SubDepth + 4, pix4, ScreenColors, z1, z2, z1_4, z1_m1_4, z2_4, fixed_col, fixed2);
+		}
+	} else {
+		for (l = LineCount; l != 0; l--, bp += row_step, Screen += ppl_step, SubScreen += ppl_step, Depth += ppl_step, SubDepth += ppl_step) {
+			if ((pix4 = *(uint32 *)(bp + 4)))
+				WRITE_4PIXELS16_CM_FAST<Mode, true>(Screen, SubScreen, Depth, SubDepth, pix4, ScreenColors, z1, z2, z1_4, z1_m1_4, z2_4, fixed_col, fixed2);
+			if ((pix4 = *(uint32 *)bp))
+				WRITE_4PIXELS16_CM_FAST<Mode, true>(Screen + 4, SubScreen + 4, Depth + 4, SubDepth + 4, pix4, ScreenColors, z1, z2, z1_4, z1_m1_4, z2_4, fixed_col, fixed2);
+		}
+	}
+}
+
+template <int Mode>
+static inline void DRAW_CLIPPED_TILE16_CM_IMPL(uint32 Tile, uint32 Offset,
+                                               uint32 StartPixel, uint32 Width,
+                                               uint32 StartLine, uint32 LineCount)
+{
+	TILE_PREAMBLE
+	register uint8 *bp;
+	TILE_CLIP_PREAMBLE
+	const int tile_step = GFX.HalfRes ? 16 : 8;
+	const int row_step = (Tile & V_FLIP) ? -tile_step : tile_step;
+	const uint32 ppl_step = GFX.HalfRes ? (GFX.PPL << 1) : GFX.PPL;
+	const uint8 z1 = GFX.Z1;
+	const uint8 z2 = GFX.Z2;
+	const uint32 z1_4 = (uint32)z1 * 0x01010101u;
+	const uint32 z1_m1_4 = (uint32)(z1 - 1) * 0x01010101u;
+	const uint32 z2_4 = (uint32)z2 * 0x01010101u;
+	const uint16 fixed_col = (uint16)GFX.FixedColour;
+	const uint32 fixed2 = (uint32)fixed_col | ((uint32)fixed_col << 16);
+	uint16 *Screen = (uint16 *)GFX.S + Offset;
+	const uint16 *SubScreen = Screen + GFX.Delta;
+	uint8 *Depth = GFX.ZBuffer + Offset;
+	const uint8 *SubDepth = GFX.SubZBuffer + Offset;
+	uint32 dd;
+
+	bp = (Tile & V_FLIP) ? (pCache + 56 - StartLine) : (pCache + StartLine);
+
+	if (__builtin_expect(!(Tile & H_FLIP), 1)) {
+		for (l = LineCount; l != 0; l--, bp += row_step, Screen += ppl_step, SubScreen += ppl_step, Depth += ppl_step, SubDepth += ppl_step) {
+			if ((dd = (*(uint32 *)bp) & d1))
+				WRITE_4PIXELS16_CM_FAST<Mode, false>(Screen, SubScreen, Depth, SubDepth, dd, ScreenColors, z1, z2, z1_4, z1_m1_4, z2_4, fixed_col, fixed2);
+			if ((dd = (*(uint32 *)(bp + 4)) & d2))
+				WRITE_4PIXELS16_CM_FAST<Mode, false>(Screen + 4, SubScreen + 4, Depth + 4, SubDepth + 4, dd, ScreenColors, z1, z2, z1_4, z1_m1_4, z2_4, fixed_col, fixed2);
+		}
+	} else {
+		SWAP_DWORD(d1);
+		SWAP_DWORD(d2);
+		for (l = LineCount; l != 0; l--, bp += row_step, Screen += ppl_step, SubScreen += ppl_step, Depth += ppl_step, SubDepth += ppl_step) {
+			if ((dd = (*(uint32 *)(bp + 4)) & d1))
+				WRITE_4PIXELS16_CM_FAST<Mode, true>(Screen, SubScreen, Depth, SubDepth, dd, ScreenColors, z1, z2, z1_4, z1_m1_4, z2_4, fixed_col, fixed2);
+			if ((dd = (*(uint32 *)bp) & d2))
+				WRITE_4PIXELS16_CM_FAST<Mode, true>(Screen + 4, SubScreen + 4, Depth + 4, SubDepth + 4, dd, ScreenColors, z1, z2, z1_4, z1_m1_4, z2_4, fixed_col, fixed2);
+		}
+	}
+}
+
+void DrawTile16Add (uint32 Tile, uint32 Offset, uint32 StartLine, uint32 LineCount)
+{
+	DRAW_TILE16_CM_IMPL<CM_ADD>(Tile, Offset, StartLine, LineCount);
 }
 
 void DrawClippedTile16Add (uint32 Tile, uint32 Offset,
 			   uint32 StartPixel, uint32 Width,
 			   uint32 StartLine, uint32 LineCount)
 {
-    TILE_PREAMBLE
-    register uint8 *bp;
-
-    TILE_CLIP_PREAMBLE
-    RENDER_CLIPPED_TILE(WRITE_4PIXELS16_ADD, WRITE_4PIXELS16_FLIPPED_ADD, 4)
+	DRAW_CLIPPED_TILE16_CM_IMPL<CM_ADD>(Tile, Offset, StartPixel, Width, StartLine, LineCount);
 }
 
-void DrawTile16Add1_2 (uint32 Tile, uint32 Offset, uint32 StartLine,
-		       uint32 LineCount)
+void DrawTile16Add1_2 (uint32 Tile, uint32 Offset, uint32 StartLine, uint32 LineCount)
 {
-    TILE_PREAMBLE
-    register uint8 *bp;
-
-    RENDER_TILE(WRITE_4PIXELS16_ADD1_2, WRITE_4PIXELS16_FLIPPED_ADD1_2, 4)
+	DRAW_TILE16_CM_IMPL<CM_ADD1_2>(Tile, Offset, StartLine, LineCount);
 }
 
 void DrawClippedTile16Add1_2 (uint32 Tile, uint32 Offset,
 			      uint32 StartPixel, uint32 Width,
 			      uint32 StartLine, uint32 LineCount)
 {
-    TILE_PREAMBLE
-    register uint8 *bp;
-
-    TILE_CLIP_PREAMBLE
-    RENDER_CLIPPED_TILE(WRITE_4PIXELS16_ADD1_2, WRITE_4PIXELS16_FLIPPED_ADD1_2, 4)
+	DRAW_CLIPPED_TILE16_CM_IMPL<CM_ADD1_2>(Tile, Offset, StartPixel, Width, StartLine, LineCount);
 }
 
-void DrawTile16Sub (uint32 Tile, uint32 Offset, uint32 StartLine,
-		    uint32 LineCount)
+void DrawTile16Sub (uint32 Tile, uint32 Offset, uint32 StartLine, uint32 LineCount)
 {
-    TILE_PREAMBLE
-    register uint8 *bp;
-
-    RENDER_TILE(WRITE_4PIXELS16_SUB, WRITE_4PIXELS16_FLIPPED_SUB, 4)
+	DRAW_TILE16_CM_IMPL<CM_SUB>(Tile, Offset, StartLine, LineCount);
 }
 
 void DrawClippedTile16Sub (uint32 Tile, uint32 Offset,
 			   uint32 StartPixel, uint32 Width,
 			   uint32 StartLine, uint32 LineCount)
 {
-    TILE_PREAMBLE
-    register uint8 *bp;
-
-    TILE_CLIP_PREAMBLE
-    RENDER_CLIPPED_TILE(WRITE_4PIXELS16_SUB, WRITE_4PIXELS16_FLIPPED_SUB, 4)
+	DRAW_CLIPPED_TILE16_CM_IMPL<CM_SUB>(Tile, Offset, StartPixel, Width, StartLine, LineCount);
 }
 
-void DrawTile16Sub1_2 (uint32 Tile, uint32 Offset, uint32 StartLine,
-		       uint32 LineCount)
+void DrawTile16Sub1_2 (uint32 Tile, uint32 Offset, uint32 StartLine, uint32 LineCount)
 {
-    TILE_PREAMBLE
-    register uint8 *bp;
-
-    RENDER_TILE(WRITE_4PIXELS16_SUB1_2, WRITE_4PIXELS16_FLIPPED_SUB1_2, 4)
+	DRAW_TILE16_CM_IMPL<CM_SUB1_2>(Tile, Offset, StartLine, LineCount);
 }
 
 void DrawClippedTile16Sub1_2 (uint32 Tile, uint32 Offset,
 			      uint32 StartPixel, uint32 Width,
 			      uint32 StartLine, uint32 LineCount)
 {
-    TILE_PREAMBLE
-    register uint8 *bp;
-
-    TILE_CLIP_PREAMBLE
-    RENDER_CLIPPED_TILE(WRITE_4PIXELS16_SUB1_2, WRITE_4PIXELS16_FLIPPED_SUB1_2, 4)
+	DRAW_CLIPPED_TILE16_CM_IMPL<CM_SUB1_2>(Tile, Offset, StartPixel, Width, StartLine, LineCount);
 }
 
-static inline void WRITE_4PIXELS16_ADDF1_2 (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
+void DrawTile16FixedAdd1_2 (uint32 Tile, uint32 Offset, uint32 StartLine, uint32 LineCount)
 {
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1, z2 = GFX.Z2;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
-
-	for (int N = 0; N < 4; N++)
-	{
-		uint8 Pixel = Pixels[N];
-		if (Pixel && z1 > Depth[N])
-		{
-			uint16 col = ScreenColors[Pixel];
-			if (SubDepth[N] == 1)
-				col = (uint16) COLOR_ADD1_2 (col, fixed_col);
-			Screen[N] = col;
-			Depth[N] = z2;
-		}
-	}
-}
-
-static inline void WRITE_4PIXELS16_FLIPPED_ADDF1_2 (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
-{
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1, z2 = GFX.Z2;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
-
-	for (int N = 0; N < 4; N++)
-	{
-		uint8 Pixel = Pixels[3 - N];
-		if (Pixel && z1 > Depth[N])
-		{
-			uint16 col = ScreenColors[Pixel];
-			if (SubDepth[N] == 1)
-				col = (uint16) COLOR_ADD1_2 (col, fixed_col);
-			Screen[N] = col;
-			Depth[N] = z2;
-		}
-	}
-}
-
-static inline void WRITE_4PIXELS16_SUBF1_2 (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
-{
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1, z2 = GFX.Z2;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
-
-	for (int N = 0; N < 4; N++)
-	{
-		uint8 Pixel = Pixels[N];
-		if (Pixel && z1 > Depth[N])
-		{
-			uint16 col = ScreenColors[Pixel];
-			if (SubDepth[N] == 1)
-				col = COLOR_SUB1_2 (col, fixed_col);
-			Screen[N] = col;
-			Depth[N] = z2;
-		}
-	}
-}
-
-static inline void WRITE_4PIXELS16_FLIPPED_SUBF1_2 (uint32 Offset, uint8 * __restrict__ Pixels, uint16 * __restrict__ ScreenColors)
-{
-	uint16 * __restrict__ Screen = (uint16 *) GFX.S + Offset;
-	uint8  * __restrict__ Depth = GFX.ZBuffer + Offset;
-	const uint8 * __restrict__ SubDepth = GFX.SubZBuffer + Offset;
-	const uint8 z1 = GFX.Z1, z2 = GFX.Z2;
-	const uint16 fixed_col = (uint16) GFX.FixedColour;
-
-	for (int N = 0; N < 4; N++)
-	{
-		uint8 Pixel = Pixels[3 - N];
-		if (Pixel && z1 > Depth[N])
-		{
-			uint16 col = ScreenColors[Pixel];
-			if (SubDepth[N] == 1)
-				col = COLOR_SUB1_2 (col, fixed_col);
-			Screen[N] = col;
-			Depth[N] = z2;
-		}
-	}
-}
-
-void DrawTile16FixedAdd1_2 (uint32 Tile, uint32 Offset, uint32 StartLine,
-			    uint32 LineCount)
-{
-    TILE_PREAMBLE
-    register uint8 *bp;
-
-    RENDER_TILE(WRITE_4PIXELS16_ADDF1_2, WRITE_4PIXELS16_FLIPPED_ADDF1_2, 4)
+	DRAW_TILE16_CM_IMPL<CM_FIXED_ADD1_2>(Tile, Offset, StartLine, LineCount);
 }
 
 void DrawClippedTile16FixedAdd1_2 (uint32 Tile, uint32 Offset,
 				   uint32 StartPixel, uint32 Width,
 				   uint32 StartLine, uint32 LineCount)
 {
-    TILE_PREAMBLE
-    register uint8 *bp;
-
-    TILE_CLIP_PREAMBLE
-    RENDER_CLIPPED_TILE(WRITE_4PIXELS16_ADDF1_2, 
-			WRITE_4PIXELS16_FLIPPED_ADDF1_2, 4)
+	DRAW_CLIPPED_TILE16_CM_IMPL<CM_FIXED_ADD1_2>(Tile, Offset, StartPixel, Width, StartLine, LineCount);
 }
 
-void DrawTile16FixedSub1_2 (uint32 Tile, uint32 Offset, uint32 StartLine,
-			    uint32 LineCount)
+void DrawTile16FixedSub1_2 (uint32 Tile, uint32 Offset, uint32 StartLine, uint32 LineCount)
 {
-    TILE_PREAMBLE
-    register uint8 *bp;
-
-    RENDER_TILE(WRITE_4PIXELS16_SUBF1_2, WRITE_4PIXELS16_FLIPPED_SUBF1_2, 4)
+	DRAW_TILE16_CM_IMPL<CM_FIXED_SUB1_2>(Tile, Offset, StartLine, LineCount);
 }
 
 void DrawClippedTile16FixedSub1_2 (uint32 Tile, uint32 Offset,
 				   uint32 StartPixel, uint32 Width,
 				   uint32 StartLine, uint32 LineCount)
 {
-    TILE_PREAMBLE
-    register uint8 *bp;
-
-    TILE_CLIP_PREAMBLE
-    RENDER_CLIPPED_TILE(WRITE_4PIXELS16_SUBF1_2, 
-			WRITE_4PIXELS16_FLIPPED_SUBF1_2, 4)
+	DRAW_CLIPPED_TILE16_CM_IMPL<CM_FIXED_SUB1_2>(Tile, Offset, StartPixel, Width, StartLine, LineCount);
 }
 
 void DrawLargePixel16Add (uint32 Tile, uint32 Offset,
